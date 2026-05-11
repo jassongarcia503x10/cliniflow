@@ -1,0 +1,13 @@
+{
+  "name": "cliniflow",
+  "version": "1.0.0",
+  "description": "CliniFlow - Sofia AI Dental Assistant",
+  "main": "index.js",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "twilio": "^4.19.0"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
