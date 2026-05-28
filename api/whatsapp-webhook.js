@@ -1,7 +1,7 @@
 // ============================================================
 // CLINIFLOW - WEBHOOK 360DIALOG - VERSION DEBUG
 // Procesa TODO antes de responder 200
-// Version 3.1 - Debug + Fix async issue
+// Version 3.2 - Fixed 360dialog outbound endpoint
 // ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -212,27 +212,31 @@ async function saveLead(clinicId, phone, name, treatment) {
 
 async function sendMessage(to, body) {
   console.log('Sending message to:', to, '| body:', body.substring(0, 50));
-  const res = await fetch('https://waba.360dialog.io/v1/messages', {
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: to,
+    type: 'text',
+    text: { body: body }
+  };
+
+  const res = await fetch('https://waba-v2.360dialog.io/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'D360-API-KEY': DIALOG360_API_KEY,
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: to,
-      type: 'text',
-      text: { body: body }
-    }),
+    body: JSON.stringify(payload),
   });
 
   const responseText = await res.text();
-  console.log('360dialog send response:', res.status, responseText.substring(0, 200));
+  console.log('360dialog send response:', res.status, responseText.substring(0, 300));
 
   if (!res.ok) {
     throw new Error('360dialog send error: ' + responseText);
   }
+
   return JSON.parse(responseText);
 }
 
@@ -256,10 +260,12 @@ async function callClaude(systemPrompt, userMessage) {
       }),
       signal: controller.signal,
     });
+
     if (!res.ok) {
       const err = await res.text();
       throw new Error('Claude HTTP ' + res.status + ': ' + err);
     }
+
     const data = await res.json();
     console.log('Claude response received successfully');
     return data.content[0].text;
@@ -268,10 +274,7 @@ async function callClaude(systemPrompt, userMessage) {
   }
 }
 
-// ─── MAIN HANDLER ─────────────────────────────────────────
 module.exports = async function handler(req, res) {
-
-  // ── VERIFICACION DE WEBHOOK (GET) ─────────────────────
   if (req.method === 'GET') {
     console.log('GET request received - webhook verification');
     const challenge = req.query['hub.challenge'];
@@ -286,23 +289,18 @@ module.exports = async function handler(req, res) {
     return res.status(405).send('Method not allowed');
   }
 
-  // ── LOG COMPLETO DEL PAYLOAD (para debug) ─────────────
   console.log('=== WEBHOOK RECEIVED ===');
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
   console.log('Body:', JSON.stringify(req.body, null, 2));
   console.log('========================');
 
-  // ── PROCESAR TODO PRIMERO, LUEGO RESPONDER ────────────
   try {
     const body = req.body;
 
-    // ── PARSEAR PAYLOAD DE 360DIALOG / META ──────────────
-    // Intentar formato Meta Cloud API primero
     let phone = null;
     let message = null;
     let contactName = null;
 
-    // Formato Meta Cloud API (360dialog hosted by Meta)
     if (body?.entry?.[0]?.changes?.[0]?.value?.messages) {
       const value = body.entry[0].changes[0].value;
       const msg = value.messages[0];
@@ -319,7 +317,6 @@ module.exports = async function handler(req, res) {
       message = msg.text?.body?.trim();
       contactName = value?.contacts?.[0]?.profile?.name;
 
-    // Formato alternativo 360dialog directo
     } else if (body?.messages?.[0]) {
       const msg = body.messages[0];
       console.log('360dialog direct format detected');
@@ -333,7 +330,6 @@ module.exports = async function handler(req, res) {
       message = msg.text?.body?.trim();
       contactName = body?.contacts?.[0]?.profile?.name;
 
-    // Formato desconocido
     } else {
       console.log('Unknown payload format or status update - not a message');
       console.log('Full body keys:', Object.keys(body || {}));
@@ -352,16 +348,16 @@ module.exports = async function handler(req, res) {
     const urgency = detectUrgency(message);
     console.log('Language:', lang, '| Urgency:', urgency);
 
-    // ── OBTENER CLINICA ───────────────────────────────────
     const clinic = await getClinic();
+
     if (!clinic) {
       console.error('No active clinic found in Supabase');
       await sendMessage(phone, 'Lo sentimos, estamos experimentando dificultades tecnicas.');
       return res.status(200).json({ status: 'ok', error: 'no clinic found' });
     }
+
     console.log('Clinic found:', clinic.name);
 
-    // ── URGENCIA VITAL ────────────────────────────────────
     if (urgency === 'life_threatening') {
       console.log('LIFE THREATENING URGENCY DETECTED');
       await sendMessage(phone, 'Llama al 112 ahora. Esto es una emergencia medica.');
@@ -369,11 +365,9 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ status: 'ok', action: 'emergency' });
     }
 
-    // ── OBTENER CONTEXTO ──────────────────────────────────
     const context = await getContext(clinic.id, phone);
     console.log('Context found:', context ? 'yes' : 'no (first message)');
 
-    // ── COMANDO RECEPCION ─────────────────────────────────
     if (/^recepcion|reception$/i.test(message.trim())) {
       const humanMsg = `Perfecto! He notificado a ${clinic.name}. Te contactaran pronto. Horario: ${clinic.hours || 'Lun-Vie 9-18h'}.`;
       await sendMessage(phone, humanMsg);
@@ -381,7 +375,6 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ status: 'ok', action: 'human_redirect' });
     }
 
-    // ── LLAMAR A CLAUDE ───────────────────────────────────
     const systemPrompt = buildPrompt(clinic, context, lang);
     let sofiaResponse;
 
@@ -392,22 +385,19 @@ module.exports = async function handler(req, res) {
       sofiaResponse = getFallback(lang, clinic.phone);
     }
 
-    // ── URGENCIA MEDICA (no vital) ────────────────────────
     if (urgency === 'urgent') {
       sofiaResponse = `Entiendo que es urgente. Para atencion inmediata llama a la clinica: ${clinic.phone}. Para cita prioritaria responde URGENTE.`;
     }
 
     console.log('Sofia response:', sofiaResponse.substring(0, 100));
 
-    // ── ENVIAR RESPUESTA ──────────────────────────────────
     await sendMessage(phone, sofiaResponse);
 
-    // ── GUARDAR EN SUPABASE ───────────────────────────────
     await saveMessage(clinic.id, phone, message, sofiaResponse, 'ai');
 
-    // ── ACTUALIZAR MEMORIA ────────────────────────────────
     const name = context?.patient_name || extractName(message) || contactName;
     const summary = updateSummary(context?.summary_so_far, message, sofiaResponse);
+
     await upsertContext(clinic.id, phone, {
       patient_name: name,
       last_intent: detectIntent(message),
@@ -415,7 +405,6 @@ module.exports = async function handler(req, res) {
       message_count: (context?.message_count || 0) + 1,
     });
 
-    // ── CREAR LEAD SI ES PRIMER MENSAJE ──────────────────
     if (!context) {
       await saveLead(clinic.id, phone, name, detectTreatment(message));
       console.log('New lead created');
@@ -423,7 +412,6 @@ module.exports = async function handler(req, res) {
 
     console.log('=== MESSAGE PROCESSED SUCCESSFULLY ===');
 
-    // ── RESPONDER A 360DIALOG AL FINAL ────────────────────
     return res.status(200).json({ status: 'ok' });
 
   } catch (error) {
@@ -431,11 +419,11 @@ module.exports = async function handler(req, res) {
     console.error('Error:', error.message);
     console.error('Stack:', error.stack);
 
-    // Intentar enviar fallback
     try {
       const body = req.body;
       const phone = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
         || body?.messages?.[0]?.from;
+
       if (phone) {
         await sendMessage(phone, 'Lo sentimos, estamos con dificultades tecnicas. Por favor intenta en unos minutos.');
       }
