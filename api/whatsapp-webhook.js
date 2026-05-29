@@ -133,7 +133,7 @@ async function sb(path, options) {
 async function getClinic() {
   try {
     const data = await sb(
-      'clinics?select=*&active=eq.true&order=created_at.asc&limit=1',
+      'clinics?select=*&active=is.true&order=created_at.asc&limit=1',
       { method: 'GET', prefer: '' }
     );
     return Array.isArray(data) && data.length > 0 ? data[0] : null;
