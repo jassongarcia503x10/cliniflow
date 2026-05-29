@@ -260,7 +260,7 @@ async function sendMessage(to, body) {
     text: { body: body }
   };
 
-  const res = await fetch('https://waba-v2.360dialog.io/messages', {
+  const res = await fetch('https://waba-v2.360dialog.io/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
