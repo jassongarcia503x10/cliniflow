@@ -1,15 +1,16 @@
 // ============================================================
 // CLINIFLOW - WEBHOOK 360DIALOG
-// Version 3.4 - ONLY fix: sbGet() for Supabase + debug logs
-// sendMessage() payload UNCHANGED from working production version
+// Version 3.5 - Supabase logEvent() para trazabilidad total
+// Cada paso critico queda guardado en webhook_logs
 // ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const DIALOG360_API_KEY = process.env.DIALOG360_API_KEY;
-const DIALOG360_PHONE_ID = process.env.DIALOG360_PHONE_ID;
 const CEO_PHONE = process.env.CEO_PHONE;
+
+// ─── URGENCY KEYWORDS ────────────────────────────────────────────────────────
 
 const URGENCY_KEYWORDS = [
   'dolor intenso','sangrado','emergencia','urgente','accidente',
@@ -24,6 +25,8 @@ const LIFE_THREATENING = [
   'no respira','not breathing','perdida de conocimiento',
   'unconscious','sangrado severo','severe bleeding',
 ];
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function detectLanguage(text) {
   const t = text.toLowerCase();
@@ -77,9 +80,9 @@ function updateSummary(prev, msg, resp) {
 
 function getFallback(lang, phone) {
   const msgs = {
-    es: `Estamos procesando tu mensaje. Para urgencias llama al ${phone}.`,
-    en: `Processing your message. For urgent matters call ${phone}.`,
-    hr: `Obradujemo vasu poruku. Hitno nazovite ${phone}.`,
+    es: `Estamos procesando tu mensaje. Para urgencias llama al ${phone || 'la clinica'}.`,
+    en: `Processing your message. For urgent matters call ${phone || 'the clinic'}.`,
+    hr: `Obradujemo vasu poruku. Hitno nazovite ${phone || 'kliniku'}.`,
   };
   return msgs[lang] || msgs['es'];
 }
@@ -95,7 +98,7 @@ function buildPrompt(clinic, context, lang) {
 
   const ctx = context
     ? `CONTEXTO PREVIO: Nombre: ${context.patient_name || 'no dado'}. Intent: ${context.last_intent || 'primera vez'}. Resumen: ${context.summary_so_far || 'primera interaccion'}.`
-    : 'CONTEXTO: Primera interaccion.';
+    : 'CONTEXTO: Primera interaccion con este paciente.';
 
   return `Eres Sofia, asistente virtual de ${clinic.name}.
 Horario: ${clinic.hours || 'Lun-Vie 9:00-18:00'}.
@@ -113,21 +116,42 @@ REGLAS MEDICAS OBLIGATORIAS:
    Responde: "Entiendo que es urgente. Llama a la clinica: ${clinic.phone}. Si es emergencia llama al 112."
 4. Si hay riesgo de vida responde SOLO: "Llama al 112 ahora. Es una emergencia medica."
 
-ESTILO: Maximo 3 oraciones. Tono calido. Termina con pregunta o accion clara.
-En primer mensaje agrega al final: "Si necesitas hablar con una persona escribe RECEPCION."`;
+ESTILO: Maximo 3 oraciones. Tono calido y profesional. Termina con pregunta o accion clara.
+En el PRIMER mensaje agrega al final: "Si necesitas hablar con una persona escribe RECEPCION."`;
 }
 
-// ─── SUPABASE: sbGet separado de sbPost ──────────────────────────────────────
-// FIX: El header "Prefer: return=representation" en GET causaba que Supabase
-// ignorara la consulta. Los GET no deben llevar ese header.
+// ─── LOG EVENT — guarda cada paso en Supabase ────────────────────────────────
+// Esta funcion NUNCA debe lanzar error — si falla, lo ignora silenciosamente
+// para no interrumpir el flujo principal de Sofia
+
+async function logEvent(step, data = {}, phone = null) {
+  try {
+    const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/webhook_logs';
+    await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_SERVICE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_SERVICE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        step,
+        phone: phone || null,
+        data: typeof data === 'string' ? { message: data } : data,
+        created_at: new Date().toISOString(),
+      }),
+    });
+  } catch (e) {
+    // Silencioso — log no debe romper el flujo
+    console.log('[logEvent] failed silently:', e.message);
+  }
+}
+
+// ─── SUPABASE: GET y POST separados ──────────────────────────────────────────
 
 async function sbGet(path) {
-  const url = SUPABASE_URL + '/rest/v1/' + path;
-
-  console.log('[Supabase] GET url:', url);
-  console.log('[Supabase] KEY defined:', !!SUPABASE_SERVICE_KEY);
-  console.log('[Supabase] URL defined:', !!SUPABASE_URL);
-
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/' + path;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -136,20 +160,13 @@ async function sbGet(path) {
       'Content-Type': 'application/json',
     },
   });
-
   const text = await res.text();
-  console.log('[Supabase] GET status:', res.status);
-  console.log('[Supabase] GET raw response:', text.substring(0, 300));
-
-  if (!res.ok) {
-    throw new Error('Supabase GET error ' + res.status + ': ' + text);
-  }
-
+  if (!res.ok) throw new Error('Supabase GET ' + res.status + ': ' + text.substring(0, 200));
   return text ? JSON.parse(text) : null;
 }
 
 async function sbPost(path, body, prefer) {
-  const url = SUPABASE_URL + '/rest/v1/' + path;
+  const url = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/' + path;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -160,36 +177,17 @@ async function sbPost(path, body, prefer) {
     },
     body: JSON.stringify(body),
   });
-
   const text = await res.text();
-  if (!res.ok) {
-    console.error('[Supabase] POST error:', res.status, text.substring(0, 200));
-  }
+  if (!res.ok) console.error('[sbPost] error:', res.status, text.substring(0, 200));
   return text ? JSON.parse(text) : null;
 }
 
 // ─── DATA FUNCTIONS ───────────────────────────────────────────────────────────
 
 async function getClinic() {
-  try {
-    console.log('[getClinic] Starting query...');
-    const data = await sbGet('clinics?select=*&limit=1');
-
-    console.log('[getClinic] typeof data:', typeof data);
-    console.log('[getClinic] isArray:', Array.isArray(data));
-    console.log('[getClinic] full result:', JSON.stringify(data));
-
-    if (Array.isArray(data) && data.length > 0) {
-      console.log('[getClinic] SUCCESS — clinic:', data[0].name);
-      return data[0];
-    }
-
-    console.error('[getClinic] FAIL — array is empty or data is not array');
-    return null;
-  } catch (e) {
-    console.error('[getClinic] EXCEPTION:', e.message);
-    return null;
-  }
+  const data = await sbGet('clinics?select=*&limit=1');
+  if (Array.isArray(data) && data.length > 0) return data[0];
+  return null;
 }
 
 async function getContext(clinicId, phone) {
@@ -199,7 +197,6 @@ async function getContext(clinicId, phone) {
     );
     return Array.isArray(data) && data.length > 0 ? data[0] : null;
   } catch (e) {
-    console.error('getContext error:', e.message);
     return null;
   }
 }
@@ -247,42 +244,31 @@ async function saveLead(clinicId, phone, name, treatment) {
   }
 }
 
-// ─── WHATSAPP: PAYLOAD IDÉNTICO AL QUE YA FUNCIONA EN PRODUCCIÓN ─────────────
+// ─── SEND WHATSAPP VIA 360DIALOG ─────────────────────────────────────────────
 
 async function sendMessage(to, body) {
-  console.log('Sending message to:', to, '| body:', body.substring(0, 50));
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: to,
-    type: 'text',
-    text: { body: body }
-  };
-
   const res = await fetch('https://waba-v2.360dialog.io/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'D360-API-KEY': DIALOG360_API_KEY,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: to,
+      type: 'text',
+      text: { body: body }
+    }),
   });
-
   const responseText = await res.text();
-  console.log('360dialog send response:', res.status, responseText.substring(0, 300));
-
-  if (!res.ok) {
-    throw new Error('360dialog send error: ' + responseText);
-  }
-
+  if (!res.ok) throw new Error('360dialog error ' + res.status + ': ' + responseText);
   return JSON.parse(responseText);
 }
 
-// ─── CLAUDE ───────────────────────────────────────────────────────────────────
+// ─── CLAUDE API ───────────────────────────────────────────────────────────────
 
 async function callClaude(systemPrompt, userMessage) {
-  console.log('Calling Claude API...');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
@@ -301,14 +287,11 @@ async function callClaude(systemPrompt, userMessage) {
       }),
       signal: controller.signal,
     });
-
     if (!res.ok) {
       const err = await res.text();
-      throw new Error('Claude HTTP ' + res.status + ': ' + err);
+      throw new Error('Claude HTTP ' + res.status + ': ' + err.substring(0, 200));
     }
-
     const data = await res.json();
-    console.log('Claude response received successfully');
     return data.content[0].text;
   } finally {
     clearTimeout(timeout);
@@ -318,6 +301,8 @@ async function callClaude(systemPrompt, userMessage) {
 // ─── MAIN HANDLER ─────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
+
+  // GET — verificacion de webhook
   if (req.method === 'GET') {
     const challenge = req.query['hub.challenge'];
     if (challenge) return res.status(200).send(challenge);
@@ -328,9 +313,13 @@ module.exports = async function handler(req, res) {
     return res.status(405).send('Method not allowed');
   }
 
-  console.log('=== WEBHOOK RECEIVED ===');
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-  console.log('========================');
+  // ── LOG PASO 1: WEBHOOK RECIBIDO ─────────────────────────
+  await logEvent('WEBHOOK_RECEIVED', {
+    body_keys: Object.keys(req.body || {}),
+    has_entry: !!req.body?.entry,
+    has_messages: !!req.body?.messages,
+    timestamp: new Date().toISOString(),
+  });
 
   try {
     const body = req.body;
@@ -338,87 +327,167 @@ module.exports = async function handler(req, res) {
     let message = null;
     let contactName = null;
 
+    // ── PARSEAR PAYLOAD ───────────────────────────────────
     if (body?.entry?.[0]?.changes?.[0]?.value?.messages) {
       const value = body.entry[0].changes[0].value;
       const msg = value.messages[0];
-      console.log('Meta Cloud API format detected');
-      if (msg.type !== 'text') return res.status(200).json({ status: 'ok', skipped: 'non-text' });
+
+      if (msg.type !== 'text') {
+        await logEvent('SKIPPED', { reason: 'non-text message', type: msg.type });
+        return res.status(200).json({ status: 'ok', skipped: 'non-text' });
+      }
+
       phone = msg.from;
       message = msg.text?.body?.trim();
       contactName = value?.contacts?.[0]?.profile?.name;
 
     } else if (body?.messages?.[0]) {
       const msg = body.messages[0];
-      console.log('360dialog direct format detected');
-      if (msg.type !== 'text') return res.status(200).json({ status: 'ok', skipped: 'non-text' });
+
+      if (msg.type !== 'text') {
+        await logEvent('SKIPPED', { reason: 'non-text message', type: msg.type });
+        return res.status(200).json({ status: 'ok', skipped: 'non-text' });
+      }
+
       phone = msg.from;
       message = msg.text?.body?.trim();
       contactName = body?.contacts?.[0]?.profile?.name;
 
     } else {
-      console.log('Status update or unknown format — keys:', Object.keys(body || {}));
-      return res.status(200).json({ status: 'ok', note: 'status update or unknown format' });
+      await logEvent('STATUS_UPDATE', {
+        body_keys: Object.keys(body || {}),
+        note: 'not a message event'
+      });
+      return res.status(200).json({ status: 'ok', note: 'status update' });
     }
 
     if (!phone || !message) {
-      console.log('Missing phone or message:', { phone, message });
+      await logEvent('MISSING_DATA', { phone: !!phone, message: !!message });
       return res.status(200).json({ status: 'ok', note: 'missing phone or message' });
     }
 
-    console.log('Processing message from:', phone, '| text:', message);
-
+    // ── LOG PASO 2: MENSAJE PARSEADO ─────────────────────
     const lang = detectLanguage(message);
     const urgency = detectUrgency(message);
-    console.log('Language:', lang, '| Urgency:', urgency);
 
-    const clinic = await getClinic();
+    await logEvent('MESSAGE_PARSED', {
+      phone,
+      message: message.substring(0, 100),
+      lang,
+      urgency,
+      contact_name: contactName,
+    }, phone);
+
+    // ── LOG PASO 3: OBTENIENDO CLINICA ────────────────────
+    await logEvent('GET_CLINIC_START', {}, phone);
+
+    let clinic = null;
+    try {
+      clinic = await getClinic();
+    } catch (clinicError) {
+      await logEvent('GET_CLINIC_ERROR', {
+        error: clinicError.message,
+        supabase_url_exists: !!SUPABASE_URL,
+        service_key_exists: !!SUPABASE_SERVICE_KEY,
+      }, phone);
+      await sendMessage(phone, getFallback(lang, null));
+      return res.status(200).json({ status: 'ok', error: 'clinic fetch failed' });
+    }
 
     if (!clinic) {
-      console.error('[handler] getClinic() returned null — check [Supabase] logs above');
-      await sendMessage(phone, 'Lo sentimos, estamos experimentando dificultades tecnicas.');
+      await logEvent('GET_CLINIC_NULL', {
+        note: 'getClinic returned null — no records in clinics table or RLS blocking',
+        supabase_url: SUPABASE_URL,
+      }, phone);
+      await sendMessage(phone, getFallback(lang, null));
       return res.status(200).json({ status: 'ok', error: 'no clinic found' });
     }
 
-    console.log('[handler] Clinic OK:', clinic.name);
+    // ── LOG PASO 4: CLINICA ENCONTRADA ────────────────────
+    await logEvent('GET_CLINIC_SUCCESS', {
+      clinic_id: clinic.id,
+      clinic_name: clinic.name,
+      clinic_plan: clinic.plan,
+    }, phone);
 
+    // ── URGENCIA VITAL ─────────────────────────────────────
     if (urgency === 'life_threatening') {
+      await logEvent('EMERGENCY_DETECTED', { phone, message: message.substring(0, 100) }, phone);
       await sendMessage(phone, 'Llama al 112 ahora. Esto es una emergencia medica.');
       await saveMessage(clinic.id, phone, message, 'EMERGENCY_REDIRECT', 'emergency');
       return res.status(200).json({ status: 'ok', action: 'emergency' });
     }
 
+    // ── LOG PASO 5: OBTENIENDO CONTEXTO ───────────────────
+    await logEvent('GET_CONTEXT_START', { clinic_id: clinic.id }, phone);
     const context = await getContext(clinic.id, phone);
-    console.log('Context found:', context ? 'yes' : 'no (first message)');
+    await logEvent('GET_CONTEXT_DONE', {
+      has_context: !!context,
+      message_count: context?.message_count || 0,
+    }, phone);
 
+    // ── COMANDO RECEPCION ──────────────────────────────────
     if (/^recepcion|reception$/i.test(message.trim())) {
       const humanMsg = `Perfecto! He notificado a ${clinic.name}. Te contactaran pronto. Horario: ${clinic.hours || 'Lun-Vie 9-18h'}.`;
       await sendMessage(phone, humanMsg);
       await saveMessage(clinic.id, phone, message, humanMsg, 'human_redirect');
+      await logEvent('HUMAN_REDIRECT', { phone }, phone);
       return res.status(200).json({ status: 'ok', action: 'human_redirect' });
     }
+
+    // ── LOG PASO 6: LLAMANDO A CLAUDE ─────────────────────
+    await logEvent('CLAUDE_START', {
+      lang,
+      has_context: !!context,
+      message_preview: message.substring(0, 80),
+    }, phone);
 
     const systemPrompt = buildPrompt(clinic, context, lang);
     let sofiaResponse;
 
     try {
       sofiaResponse = await callClaude(systemPrompt, message);
+      await logEvent('CLAUDE_SUCCESS', {
+        response_preview: sofiaResponse.substring(0, 100),
+        response_length: sofiaResponse.length,
+      }, phone);
     } catch (claudeError) {
-      console.error('Claude API failed:', claudeError.message);
+      await logEvent('CLAUDE_ERROR', {
+        error: claudeError.message,
+        api_key_exists: !!CLAUDE_API_KEY,
+      }, phone);
       sofiaResponse = getFallback(lang, clinic.phone);
     }
 
+    // ── URGENCIA MEDICA (no vital) ────────────────────────
     if (urgency === 'urgent') {
       sofiaResponse = `Entiendo que es urgente. Para atencion inmediata llama a la clinica: ${clinic.phone}. Para cita prioritaria responde URGENTE.`;
+      await logEvent('MEDICAL_URGENCY', { phone, message: message.substring(0, 100) }, phone);
     }
 
-    console.log('Sofia response:', sofiaResponse.substring(0, 100));
+    // ── LOG PASO 7: ENVIANDO WHATSAPP ─────────────────────
+    await logEvent('SEND_WHATSAPP_START', {
+      to: phone,
+      response_preview: sofiaResponse.substring(0, 100),
+    }, phone);
 
-    await sendMessage(phone, sofiaResponse);
+    try {
+      await sendMessage(phone, sofiaResponse);
+      await logEvent('SEND_WHATSAPP_SUCCESS', { to: phone }, phone);
+    } catch (sendError) {
+      await logEvent('SEND_WHATSAPP_ERROR', {
+        error: sendError.message,
+        to: phone,
+      }, phone);
+      return res.status(200).json({ status: 'ok', error: 'send failed' });
+    }
+
+    // ── GUARDAR EN SUPABASE ────────────────────────────────
     await saveMessage(clinic.id, phone, message, sofiaResponse, 'ai');
 
+    // ── ACTUALIZAR MEMORIA ─────────────────────────────────
     const name = context?.patient_name || extractName(message) || contactName;
     const summary = updateSummary(context?.summary_so_far, message, sofiaResponse);
-
     await upsertContext(clinic.id, phone, {
       patient_name: name,
       last_intent: detectIntent(message),
@@ -426,28 +495,36 @@ module.exports = async function handler(req, res) {
       message_count: (context?.message_count || 0) + 1,
     });
 
+    // ── CREAR LEAD ─────────────────────────────────────────
     if (!context) {
       await saveLead(clinic.id, phone, name, detectTreatment(message));
-      console.log('New lead created');
     }
 
-    console.log('=== MESSAGE PROCESSED SUCCESSFULLY ===');
+    // ── LOG PASO 8: COMPLETADO ────────────────────────────
+    await logEvent('MESSAGE_PROCESSED_OK', {
+      phone,
+      clinic: clinic.name,
+      lang,
+      urgency,
+      is_new_lead: !context,
+    }, phone);
+
     return res.status(200).json({ status: 'ok' });
 
   } catch (error) {
-    console.error('=== CRITICAL WEBHOOK ERROR ===');
-    console.error('Error:', error.message);
-    console.error('Stack:', error.stack);
+    await logEvent('CRITICAL_ERROR', {
+      error: error.message,
+      stack: error.stack?.substring(0, 500),
+    });
 
     try {
-      const body = req.body;
-      const phone = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
-        || body?.messages?.[0]?.from;
+      const phone = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
+        || req.body?.messages?.[0]?.from;
       if (phone) {
         await sendMessage(phone, 'Lo sentimos, estamos con dificultades tecnicas. Por favor intenta en unos minutos.');
       }
     } catch (e) {
-      console.error('Fallback also failed:', e.message);
+      // Silencioso
     }
 
     return res.status(200).json({ status: 'error', message: error.message });
