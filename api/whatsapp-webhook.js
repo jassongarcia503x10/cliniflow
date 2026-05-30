@@ -1,7 +1,8 @@
 // ============================================================
 // CLINIFLOW - WEBHOOK 360DIALOG
-// Version 3.6 - FIX: sendMessage endpoint sin /v1/
-// Unico cambio vs 3.5: waba-v2.360dialog.io/messages
+// Version 3.7
+// FIX 1: Deduplicacion de mensajes (evita respuestas triples)
+// FIX 2: Precios reales desde Supabase (no inventados)
 // ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -10,7 +11,8 @@ const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const DIALOG360_API_KEY = process.env.DIALOG360_API_KEY;
 const CEO_PHONE = process.env.CEO_PHONE;
 
-// ─── URGENCY KEYWORDS ────────────────────────────────────────────────────────
+// Cache en memoria para deduplicacion (se limpia cada deploy)
+const processedMessages = new Set();
 
 const URGENCY_KEYWORDS = [
   'dolor intenso','sangrado','emergencia','urgente','accidente',
@@ -25,8 +27,6 @@ const LIFE_THREATENING = [
   'no respira','not breathing','perdida de conocimiento',
   'unconscious','sangrado severo','severe bleeding',
 ];
-
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function detectLanguage(text) {
   const t = text.toLowerCase();
@@ -87,7 +87,9 @@ function getFallback(lang, phone) {
   return msgs[lang] || msgs['es'];
 }
 
-function buildPrompt(clinic, context, lang) {
+// ─── BUILD PROMPT CON TRATAMIENTOS REALES ────────────────────────────────────
+
+function buildPrompt(clinic, context, lang, treatments) {
   const langInstr = {
     es: 'Responde SIEMPRE en espanol.',
     en: 'Respond ALWAYS in English.',
@@ -100,14 +102,33 @@ function buildPrompt(clinic, context, lang) {
     ? `CONTEXTO PREVIO: Nombre: ${context.patient_name || 'no dado'}. Intent: ${context.last_intent || 'primera vez'}. Resumen: ${context.summary_so_far || 'primera interaccion'}.`
     : 'CONTEXTO: Primera interaccion con este paciente.';
 
+  // Construir lista de tratamientos reales con precios reales
+  let treatmentList = 'No hay tratamientos configurados aun.';
+  if (treatments && treatments.length > 0) {
+    treatmentList = treatments.map(t => {
+      if (t.price_type === 'fixed') return `- ${t.name}: ${t.price} ${clinic.currency || 'EUR'}`;
+      if (t.price_type === 'range') return `- ${t.name}: desde ${t.price_min} hasta ${t.price_max} ${clinic.currency || 'EUR'}`;
+      return `- ${t.name}: consultar precio`;
+    }).join('\n');
+  }
+
   return `Eres Sofia, asistente virtual de ${clinic.name}.
 Horario: ${clinic.hours || 'Lun-Vie 9:00-18:00'}.
 Telefono: ${clinic.phone || 'consultar con clinica'}.
+Ciudad: ${clinic.city || ''}.
 
 ${langInstr}
 ${ctx}
 
-FUNCIONES: Agendar citas, informar precios y horarios, resolver dudas generales.
+TRATAMIENTOS Y PRECIOS REALES DE ESTA CLINICA:
+${treatmentList}
+
+IMPORTANTE SOBRE PRECIOS:
+- Usa SOLO los precios de la lista de arriba.
+- Si el tratamiento no esta en la lista, di: "Para el precio exacto llama al ${clinic.phone}."
+- NUNCA inventes precios.
+
+FUNCIONES: Agendar citas, informar precios reales, resolver dudas generales.
 
 REGLAS MEDICAS OBLIGATORIAS:
 1. NUNCA diagnostiques enfermedades.
@@ -116,8 +137,11 @@ REGLAS MEDICAS OBLIGATORIAS:
    Responde: "Entiendo que es urgente. Llama a la clinica: ${clinic.phone}. Si es emergencia llama al 112."
 4. Si hay riesgo de vida responde SOLO: "Llama al 112 ahora. Es una emergencia medica."
 
-ESTILO: Maximo 3 oraciones. Tono calido y profesional. Termina con pregunta o accion clara.
-En el PRIMER mensaje agrega al final: "Si necesitas hablar con una persona escribe RECEPCION."`;
+ESTILO:
+- Maximo 3 oraciones por mensaje.
+- Tono calido y profesional.
+- Termina siempre con una pregunta o accion clara.
+- En el PRIMER mensaje agrega al final: "Si necesitas hablar con una persona escribe RECEPCION."`;
 }
 
 // ─── LOG EVENT ────────────────────────────────────────────────────────────────
@@ -179,12 +203,23 @@ async function sbPost(path, body, prefer) {
   return text ? JSON.parse(text) : null;
 }
 
-// ─── DATA FUNCTIONS ───────────────────────────────────────────────────────────
-
 async function getClinic() {
   const data = await sbGet('clinics?select=*&limit=1');
   if (Array.isArray(data) && data.length > 0) return data[0];
   return null;
+}
+
+// FIX 2: Cargar tratamientos reales de Supabase
+async function getTreatments(clinicId) {
+  try {
+    const data = await sbGet(
+      `treatments?select=*&clinic_id=eq.${clinicId}&order=name.asc`
+    );
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    console.error('getTreatments error:', e.message);
+    return [];
+  }
 }
 
 async function getContext(clinicId, phone) {
@@ -242,45 +277,28 @@ async function saveLead(clinicId, phone, name, treatment) {
 }
 
 // ─── SEND WHATSAPP ────────────────────────────────────────────────────────────
-// FIX v3.6: endpoint sin /v1/ — igual al que funciona en test-send.js
 
 async function sendMessage(to, body) {
-  const payload = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: to,
-    type: 'text',
-    text: { body: body }
-  };
-
-  // ✅ CORRECTO: sin /v1/ — confirmado funcionando en test-send.js
   const res = await fetch('https://waba-v2.360dialog.io/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'D360-API-KEY': DIALOG360_API_KEY,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: to,
+      type: 'text',
+      text: { body: body }
+    }),
   });
-
   const responseText = await res.text();
-
-  await logEvent('SEND_WHATSAPP_ATTEMPT', {
-    to,
-    status: res.status,
-    ok: res.ok,
-    response: responseText.substring(0, 300),
-    endpoint: 'waba-v2.360dialog.io/messages',
-  }, to);
-
-  if (!res.ok) {
-    throw new Error('360dialog ' + res.status + ': ' + responseText.substring(0, 200));
-  }
-
+  if (!res.ok) throw new Error('360dialog ' + res.status + ': ' + responseText.substring(0, 200));
   return JSON.parse(responseText);
 }
 
-// ─── CLAUDE API ───────────────────────────────────────────────────────────────
+// ─── CLAUDE ───────────────────────────────────────────────────────────────────
 
 async function callClaude(systemPrompt, userMessage) {
   const controller = new AbortController();
@@ -290,7 +308,7 @@ async function callClaude(systemPrompt, userMessage) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': CLAUDE_API_KEY,
+        'x-api-key': CLAUDE_API_KEY.trim(),
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
@@ -326,113 +344,116 @@ module.exports = async function handler(req, res) {
     return res.status(405).send('Method not allowed');
   }
 
-  await logEvent('WEBHOOK_RECEIVED', {
-    body_keys: Object.keys(req.body || {}),
-    has_entry: !!req.body?.entry,
-    has_messages: !!req.body?.messages,
-    timestamp: new Date().toISOString(),
-  });
-
   try {
     const body = req.body;
     let phone = null;
     let message = null;
     let contactName = null;
+    let messageId = null;
 
+    // Parsear payload
     if (body?.entry?.[0]?.changes?.[0]?.value?.messages) {
       const value = body.entry[0].changes[0].value;
       const msg = value.messages[0];
-      if (msg.type !== 'text') {
-        await logEvent('SKIPPED', { reason: 'non-text', type: msg.type });
-        return res.status(200).json({ status: 'ok', skipped: 'non-text' });
-      }
+      if (msg.type !== 'text') return res.status(200).json({ status: 'ok', skipped: 'non-text' });
       phone = msg.from;
       message = msg.text?.body?.trim();
       contactName = value?.contacts?.[0]?.profile?.name;
+      messageId = msg.id; // ID unico del mensaje
 
     } else if (body?.messages?.[0]) {
       const msg = body.messages[0];
-      if (msg.type !== 'text') {
-        await logEvent('SKIPPED', { reason: 'non-text', type: msg.type });
-        return res.status(200).json({ status: 'ok', skipped: 'non-text' });
-      }
+      if (msg.type !== 'text') return res.status(200).json({ status: 'ok', skipped: 'non-text' });
       phone = msg.from;
       message = msg.text?.body?.trim();
       contactName = body?.contacts?.[0]?.profile?.name;
+      messageId = msg.id;
 
     } else {
-      await logEvent('STATUS_UPDATE', { body_keys: Object.keys(body || {}) });
       return res.status(200).json({ status: 'ok', note: 'status update' });
     }
 
     if (!phone || !message) {
-      await logEvent('MISSING_DATA', { phone: !!phone, message: !!message });
       return res.status(200).json({ status: 'ok', note: 'missing data' });
     }
+
+    // ── FIX 1: DEDUPLICACION POR MESSAGE ID ──────────────
+    // Si ya procesamos este mensaje exacto, ignorarlo
+    if (messageId && processedMessages.has(messageId)) {
+      await logEvent('DUPLICATE_IGNORED', { messageId, phone }, phone);
+      return res.status(200).json({ status: 'ok', note: 'duplicate ignored' });
+    }
+
+    // Marcar como procesado inmediatamente
+    if (messageId) {
+      processedMessages.add(messageId);
+      // Limpiar cache si crece mucho (evitar memory leak)
+      if (processedMessages.size > 1000) processedMessages.clear();
+    }
+
+    await logEvent('WEBHOOK_RECEIVED', {
+      messageId,
+      phone,
+      message: message.substring(0, 50),
+    }, phone);
 
     const lang = detectLanguage(message);
     const urgency = detectUrgency(message);
 
-    await logEvent('MESSAGE_PARSED', {
-      phone,
-      message: message.substring(0, 100),
-      lang,
-      urgency,
-    }, phone);
+    await logEvent('MESSAGE_PARSED', { lang, urgency, message: message.substring(0, 80) }, phone);
 
-    await logEvent('GET_CLINIC_START', {}, phone);
+    // Obtener clinica
     let clinic = null;
     try {
       clinic = await getClinic();
-    } catch (clinicError) {
-      await logEvent('GET_CLINIC_ERROR', { error: clinicError.message }, phone);
+    } catch (e) {
+      await logEvent('GET_CLINIC_ERROR', { error: e.message }, phone);
       await sendMessage(phone, getFallback(lang, null));
-      return res.status(200).json({ status: 'ok', error: 'clinic fetch failed' });
+      return res.status(200).json({ status: 'ok', error: 'clinic error' });
     }
 
     if (!clinic) {
-      await logEvent('GET_CLINIC_NULL', { note: 'no records found' }, phone);
+      await logEvent('GET_CLINIC_NULL', {}, phone);
       await sendMessage(phone, getFallback(lang, null));
       return res.status(200).json({ status: 'ok', error: 'no clinic' });
     }
 
-    await logEvent('GET_CLINIC_SUCCESS', {
-      clinic_id: clinic.id,
-      clinic_name: clinic.name,
-    }, phone);
+    await logEvent('GET_CLINIC_SUCCESS', { clinic: clinic.name }, phone);
 
+    // Urgencia vital
     if (urgency === 'life_threatening') {
-      await logEvent('EMERGENCY_DETECTED', { phone }, phone);
       await sendMessage(phone, 'Llama al 112 ahora. Esto es una emergencia medica.');
       await saveMessage(clinic.id, phone, message, 'EMERGENCY_REDIRECT', 'emergency');
       return res.status(200).json({ status: 'ok', action: 'emergency' });
     }
 
-    await logEvent('GET_CONTEXT_START', {}, phone);
-    const context = await getContext(clinic.id, phone);
-    await logEvent('GET_CONTEXT_DONE', { has_context: !!context }, phone);
+    // FIX 2: Cargar tratamientos reales en paralelo con contexto
+    const [context, treatments] = await Promise.all([
+      getContext(clinic.id, phone),
+      getTreatments(clinic.id),
+    ]);
 
+    await logEvent('GET_CONTEXT_DONE', {
+      has_context: !!context,
+      treatments_count: treatments.length,
+    }, phone);
+
+    // Comando RECEPCION
     if (/^recepcion|reception$/i.test(message.trim())) {
       const humanMsg = `Perfecto! He notificado a ${clinic.name}. Te contactaran pronto. Horario: ${clinic.hours || 'Lun-Vie 9-18h'}.`;
       await sendMessage(phone, humanMsg);
       await saveMessage(clinic.id, phone, message, humanMsg, 'human_redirect');
-      await logEvent('HUMAN_REDIRECT', {}, phone);
       return res.status(200).json({ status: 'ok', action: 'human_redirect' });
     }
 
-    await logEvent('CLAUDE_START', {
-      lang,
-      message_preview: message.substring(0, 80),
-    }, phone);
-
-    const systemPrompt = buildPrompt(clinic, context, lang);
+    // Llamar a Claude con tratamientos reales
+    await logEvent('CLAUDE_START', { lang, treatments_count: treatments.length }, phone);
+    const systemPrompt = buildPrompt(clinic, context, lang, treatments);
     let sofiaResponse;
 
     try {
       sofiaResponse = await callClaude(systemPrompt, message);
-      await logEvent('CLAUDE_SUCCESS', {
-        response_preview: sofiaResponse.substring(0, 100),
-      }, phone);
+      await logEvent('CLAUDE_SUCCESS', { preview: sofiaResponse.substring(0, 80) }, phone);
     } catch (claudeError) {
       await logEvent('CLAUDE_ERROR', { error: claudeError.message }, phone);
       sofiaResponse = getFallback(lang, clinic.phone);
@@ -440,21 +461,19 @@ module.exports = async function handler(req, res) {
 
     if (urgency === 'urgent') {
       sofiaResponse = `Entiendo que es urgente. Para atencion inmediata llama a la clinica: ${clinic.phone}. Para cita prioritaria responde URGENTE.`;
-      await logEvent('MEDICAL_URGENCY', {}, phone);
     }
 
-    await logEvent('SEND_WHATSAPP_START', {
-      response_preview: sofiaResponse.substring(0, 100),
-    }, phone);
-
+    // Enviar respuesta
+    await logEvent('SEND_WHATSAPP_START', { preview: sofiaResponse.substring(0, 80) }, phone);
     try {
       await sendMessage(phone, sofiaResponse);
-      await logEvent('SEND_WHATSAPP_SUCCESS', { to: phone }, phone);
+      await logEvent('SEND_WHATSAPP_SUCCESS', {}, phone);
     } catch (sendError) {
       await logEvent('SEND_WHATSAPP_ERROR', { error: sendError.message }, phone);
       return res.status(200).json({ status: 'ok', error: 'send failed' });
     }
 
+    // Guardar datos
     await saveMessage(clinic.id, phone, message, sofiaResponse, 'ai');
 
     const name = context?.patient_name || extractName(message) || contactName;
@@ -470,28 +489,16 @@ module.exports = async function handler(req, res) {
       await saveLead(clinic.id, phone, name, detectTreatment(message));
     }
 
-    await logEvent('MESSAGE_PROCESSED_OK', {
-      clinic: clinic.name,
-      lang,
-      is_new_lead: !context,
-    }, phone);
-
+    await logEvent('MESSAGE_PROCESSED_OK', { clinic: clinic.name, lang }, phone);
     return res.status(200).json({ status: 'ok' });
 
   } catch (error) {
-    await logEvent('CRITICAL_ERROR', {
-      error: error.message,
-      stack: error.stack?.substring(0, 500),
-    });
-
+    await logEvent('CRITICAL_ERROR', { error: error.message, stack: error.stack?.substring(0, 300) });
     try {
       const phone = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
         || req.body?.messages?.[0]?.from;
-      if (phone) {
-        await sendMessage(phone, 'Lo sentimos, estamos con dificultades tecnicas. Intenta en unos minutos.');
-      }
+      if (phone) await sendMessage(phone, 'Lo sentimos, intenta en unos minutos.');
     } catch (e) { /* silencioso */ }
-
     return res.status(200).json({ status: 'error', message: error.message });
   }
 };
