@@ -602,7 +602,7 @@ module.exports = async function handler(req, res) {
 
         if (!tooRecent) {
           try {
-            await saveBooking(clinic, bookingData, bookingMode);
+            await saveBooking(clinic, { ...bookingData, phone: bookingData.phone || phone }, bookingMode);
             bookingResult = { mode: bookingMode };
           } catch (e) {
             await logEvent('BOOKING_ERROR', { error: e.message }, phone);
