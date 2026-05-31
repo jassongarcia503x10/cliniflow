@@ -1,10 +1,10 @@
 // ============================================================
 // CLINIFLOW - WEBHOOK 360DIALOG
-// Version 3.8 — Sofia como CLOSER
-// - Idioma bloqueado (no cambia)
-// - Estados de conversacion (no repite preguntas)
-// - Precios siempre desde Supabase
-// - Solo deriva a telefono en emergencia
+// Version 3.9 — Confirmacion real de citas
+// - booking_mode: automatic (confirma ya) vs manual (espera recepcion)
+// - INSERT real en pending_bookings o appointments
+// - Notificacion al director de la clinica
+// - Recordatorios programados en scheduled_reminders
 // ============================================================
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -29,19 +29,19 @@ const LIFE_THREATENING = [
   'unconscious','sangrado severo','severe bleeding',
 ];
 
-// ─── LANGUAGE — bloqueado desde primer mensaje ────────────────
+// ─── LANGUAGE ─────────────────────────────────────────────────
 
 function detectLanguage(text) {
   const t = text.toLowerCase();
-  if (/\b(hola|gracias|buenos|quiero|tengo|cita|dentista|me gustaria|cuanto|limpieza)\b/.test(t)) return 'es';
+  if (/\b(hola|gracias|buenos|quiero|tengo|cita|dentista|me gustaria|cuanto|limpieza|para el)\b/.test(t)) return 'es';
   if (/\b(bonjour|merci|je veux)\b/.test(t)) return 'fr';
   if (/\b(hallo|danke|ich|zahnarzt)\b/.test(t)) return 'de';
-  if (/\b(hvala|zelim|zubar|dobar|zelim)\b/.test(t)) return 'hr';
+  if (/\b(hvala|zelim|zubar|dobar)\b/.test(t)) return 'hr';
   return 'en';
 }
 
-function getLockedLang(context, detectedLang) {
-  return context?.context_json?.locked_lang || detectedLang;
+function getLockedLang(context, detected) {
+  return context?.context_json?.locked_lang || detected;
 }
 
 // ─── URGENCY ──────────────────────────────────────────────────
@@ -53,30 +53,38 @@ function detectUrgency(text) {
   return 'normal';
 }
 
-// ─── EXTRACT BOOKING DATA FROM MESSAGE ───────────────────────
+// ─── BOOKING DATA EXTRACTION ─────────────────────────────────
 
 function extractBookingData(message, current = {}) {
   const m = message.toLowerCase();
   const d = { ...current };
 
-  if (!d.treatment) {
-    if (/limpieza|cleaning|čišćenje|profilaxis/.test(m)) d.treatment = 'Limpieza dental';
-    else if (/implante|implant|implantati/.test(m))      d.treatment = 'Implantes';
-    else if (/blanquea|whiten|izbjeljivanje/.test(m))     d.treatment = 'Blanqueamiento';
-    else if (/ortodoncia|ortodoncija|braces/.test(m))     d.treatment = 'Ortodoncia';
-    else if (/empaste|filling|plomba/.test(m))            d.treatment = 'Empaste';
-    else if (/consulta|pregled|checkup|revision/.test(m)) d.treatment = 'Consulta general';
+  // Tratamientos (multiples en el mismo mensaje)
+  const foundTreatments = [];
+  if (/limpieza|cleaning|čišćenje|profilaxis/.test(m)) foundTreatments.push('Limpieza dental');
+  if (/implante|implant|implantati/.test(m)) foundTreatments.push('Implantes');
+  if (/blanquea|whiten|izbjeljivanje/.test(m)) foundTreatments.push('Blanqueamiento');
+  if (/ortodoncia|ortodoncija|braces/.test(m)) foundTreatments.push('Ortodoncia');
+  if (/empaste|filling|plomba/.test(m)) foundTreatments.push('Empaste');
+  if (/consulta|pregled|checkup|revision/.test(m)) foundTreatments.push('Consulta general');
+
+  if (foundTreatments.length > 0) {
+    // Combinar con tratamientos previos sin duplicar
+    const prev = d.treatments ? d.treatments.split(', ') : [];
+    const combined = [...new Set([...prev, ...foundTreatments])];
+    d.treatment = combined[0]; // para compatibilidad
+    d.treatments = combined.join(', ');
   }
 
   if (!d.day) {
-    if (/lunes|monday/.test(m))       d.day = 'lunes';
-    else if (/martes|tuesday/.test(m)) d.day = 'martes';
+    if (/lunes|monday/.test(m))         d.day = 'lunes';
+    else if (/martes|tuesday/.test(m))   d.day = 'martes';
     else if (/miercoles|wednesday/.test(m)) d.day = 'miercoles';
-    else if (/jueves|thursday/.test(m)) d.day = 'jueves';
-    else if (/viernes|friday/.test(m)) d.day = 'viernes';
-    else if (/sabado|saturday/.test(m)) d.day = 'sabado';
-    else if (/hoy|today/.test(m))      d.day = 'hoy';
-    else if (/manana|tomorrow/.test(m)) d.day = 'manana';
+    else if (/jueves|thursday/.test(m))  d.day = 'jueves';
+    else if (/viernes|friday/.test(m))   d.day = 'viernes';
+    else if (/sabado|saturday/.test(m))  d.day = 'sabado';
+    else if (/hoy|today/.test(m))        d.day = 'hoy';
+    else if (/manana|tomorrow/.test(m))  d.day = 'manana';
   }
 
   if (!d.time) {
@@ -84,7 +92,7 @@ function extractBookingData(message, current = {}) {
     if (tMatch) {
       const raw = tMatch[1] || tMatch[3];
       let hour = parseInt(raw);
-      if ((/tarde|pm/.test(m)) && hour < 12) hour += 12;
+      if (/tarde|pm/.test(m) && hour < 12) hour += 12;
       const mins = tMatch[2] || tMatch[4] || '00';
       d.time = `${hour}:${mins}`;
     }
@@ -98,7 +106,7 @@ function extractBookingData(message, current = {}) {
   return d;
 }
 
-function bookingState(d) {
+function getBookingState(d) {
   if (d.treatment && d.day && d.time && d.name) return 'ready_to_book';
   if (d.treatment && (d.day || d.time))          return 'has_treatment';
   if (d.treatment)                                return 'has_treatment';
@@ -109,7 +117,7 @@ function bookingState(d) {
 
 function detectIntent(message) {
   const m = message.toLowerCase();
-  if (/cita|appointment|agendar|reservar|booking/.test(m)) return 'booking';
+  if (/cita|appointment|agendar|reservar/.test(m)) return 'booking';
   if (/cancelar|cancel/.test(m)) return 'cancel';
   if (/precio|price|cuanto|cuesta/.test(m)) return 'info';
   return 'unknown';
@@ -135,12 +143,6 @@ function extractName(message) {
   return null;
 }
 
-function updateSummary(prev, msg, resp) {
-  const entry = `P: ${msg.substring(0, 80)} | S: ${resp.substring(0, 80)}`;
-  if (!prev) return entry;
-  return prev.split('\n').slice(-2).concat(entry).join('\n');
-}
-
 function getFallback(lang, phone) {
   const msgs = {
     es: `Estamos procesando tu mensaje. Para urgencias llama al ${phone || 'la clinica'}.`,
@@ -150,31 +152,28 @@ function getFallback(lang, phone) {
   return msgs[lang] || msgs['es'];
 }
 
-// ─── BUILD SOFIA PROMPT V2 — CLOSER ──────────────────────────
+// ─── BUILD PROMPT ─────────────────────────────────────────────
 
 function buildSofiaPrompt(clinic, context, lang, treatments, doctors, settings, bookingData) {
-
   const langInstr = {
-    es: 'RESPONDE SIEMPRE EN ESPAÑOL. Aunque recibas texto en otro idioma del sistema, responde al paciente en español.',
-    en: 'RESPOND ALWAYS IN ENGLISH. Never switch languages.',
-    hr: 'UVIJEK ODGOVARAJ NA HRVATSKOM. Nikad ne mijenjaj jezik.',
-    fr: 'RÉPONDS TOUJOURS EN FRANÇAIS.',
-    de: 'ANTWORTE IMMER AUF DEUTSCH.',
-  }[lang] || 'Respond in the SAME language as the patient. Never change language.';
+    es: 'RESPONDE SIEMPRE EN ESPAÑOL sin excepcion.',
+    en: 'RESPOND ALWAYS IN ENGLISH without exception.',
+    hr: 'UVIJEK ODGOVARAJ NA HRVATSKOM bez iznimke.',
+    fr: 'RÉPONDS TOUJOURS EN FRANÇAIS sans exception.',
+    de: 'ANTWORTE IMMER AUF DEUTSCH ohne Ausnahme.',
+  }[lang] || 'Respond in the SAME language as the patient. Never change.';
 
-  // Lo que Sofia ya sabe — no volver a preguntar
   const knows = [];
-  if (bookingData.name)      knows.push(`✓ Nombre: ${bookingData.name}`);
-  if (bookingData.treatment) knows.push(`✓ Tratamiento: ${bookingData.treatment}`);
-  if (bookingData.day)       knows.push(`✓ Dia: ${bookingData.day}`);
-  if (bookingData.time)      knows.push(`✓ Hora: ${bookingData.time}`);
-  if (bookingData.phone)     knows.push(`✓ Telefono: ${bookingData.phone}`);
+  if (bookingData.name) knows.push(`✓ Nombre: ${bookingData.name}`);
+  if (bookingData.treatments || bookingData.treatment) knows.push(`✓ Tratamiento(s): ${bookingData.treatments || bookingData.treatment}`);
+  if (bookingData.day)  knows.push(`✓ Dia: ${bookingData.day}`);
+  if (bookingData.time) knows.push(`✓ Hora: ${bookingData.time}`);
+  if (bookingData.phone) knows.push(`✓ Telefono: ${bookingData.phone}`);
 
   const knownSection = knows.length > 0
     ? `YA TIENES ESTA INFORMACION — NO VUELVAS A PREGUNTAR:\n${knows.join('\n')}`
     : 'Primera interaccion con este paciente.';
 
-  // Tratamientos con precios reales
   let priceList = 'Sin tratamientos configurados.';
   if (treatments?.length > 0) {
     const curr = clinic.currency || 'EUR';
@@ -190,60 +189,57 @@ function buildSofiaPrompt(clinic, context, lang, treatments, doctors, settings, 
   }
 
   const canBook = settings?.sofia_can_book !== false;
+  const bookingMode = settings?.booking_mode || 'manual';
   const schedule = `Lun-Vie: ${clinic.hours_mon_fri || '09:00-18:00'} | Sab: ${clinic.hours_saturday || 'Cerrado'}`;
+  const state = getBookingState(bookingData);
 
-  const nextStep = !bookingData.treatment ? 'Pregunta por el tratamiento que necesita.'
-    : (!bookingData.day || !bookingData.time) ? 'Ya sabes el tratamiento. Pregunta solo dia y hora preferida.'
-    : !bookingData.name ? 'Ya tienes tratamiento, dia y hora. Pide solo el nombre completo para confirmar.'
-    : 'Tienes toda la informacion. Confirma la cita con todos los detalles y di que el equipo les contactara para confirmar.';
+  const confirmationPhrase = bookingMode === 'automatic'
+    ? 'Tu cita ha sido CONFIRMADA. El equipo te esperara.'
+    : 'Tu solicitud fue registrada. El equipo de la clinica te confirmara por este chat en breve.';
 
-  return `Eres Sofia, recepcionista y asistente IA de ${clinic.name}.
-OBJETIVO: Convertir cada mensaje en una CITA AGENDADA. Eres proactiva y directa.
+  const nextStep = state === 'ready_to_book'
+    ? `Tienes TODA la informacion necesaria: nombre, tratamiento, dia y hora. CONFIRMA la cita ahora mismo con todos los detalles usando esta frase: "${confirmationPhrase}"`
+    : !bookingData.treatment ? 'Pregunta por el tratamiento que necesita.'
+    : (!bookingData.day || !bookingData.time) ? 'Pregunta solo dia y hora preferida.'
+    : 'Pide solo el nombre completo para confirmar.';
+
+  return `Eres Sofia, recepcionista IA elite de ${clinic.name}.
+OBJETIVO: Cerrar citas. Eres una CLOSER, no una informante.
 
 ${langInstr}
 
-DATOS DE LA CLINICA:
+CLINICA:
 • Horario: ${schedule}
-• Telefono: ${clinic.phone || '+385 20 123 456'} (solo para emergencias medicas)
-• Direccion: ${clinic.address || 'Dubrovnik'}
+• Telefono: ${clinic.phone} (SOLO para emergencias medicas)
 
 ${knownSection}
 
-TRATAMIENTOS Y PRECIOS (FUENTE OFICIAL — USA SOLO ESTOS):
+TRATAMIENTOS Y PRECIOS OFICIALES:
 ${priceList}
 
-REGLA ABSOLUTA DE PRECIOS:
-Si el tratamiento esta en la lista → da el precio exacto de la lista.
-NUNCA digas "llama para consultar precio" si el precio existe arriba.
-Solo di "llama" si el tratamiento NO existe en la lista.
+REGLA ABSOLUTA: Si el tratamiento esta en la lista → muestra el precio exacto. NUNCA digas "llama para precio" si existe arriba.
 
-SIGUIENTE PASO EN EL AGENDAMIENTO:
+SIGUIENTE ACCION:
 ${nextStep}
 
-${canBook ? `REGLAS DE AGENDAMIENTO:
-• NUNCA digas "llama a la clinica" para agendar. Tu puedes hacerlo.
-• NUNCA derives a recepcion para confirmar precio si el precio esta en la lista.
-• Cuando tengas: tratamiento + dia + hora + nombre → confirma la cita directamente.
-• Ejemplo de confirmacion: "Perfecto [nombre], te he registrado para [tratamiento] el [dia] a las [hora]. El equipo de ${clinic.name} te confirmara por este chat. ¿Algo mas en que pueda ayudarte?"
-` : 'Para agendar citas escribe RECEPCION.'}
+${canBook ? `AGENDAMIENTO:
+• NUNCA digas "llama a la clinica" para agendar.
+• NUNCA derives a recepcion para precios o citas.
+• Una vez tengas tratamiento + dia + hora + nombre: confirma la cita directamente.
+• Confirmacion: "${confirmationPhrase}"
+` : 'Para agendar escribe RECEPCION.'}
 
-CUANDO DERIVAR A RECEPCION O TELEFONO (SOLO EN ESTOS CASOS):
-• El paciente escribe "RECEPCION"
+SOLO DERIVA EN ESTOS CASOS:
+• Paciente escribe "RECEPCION"
 • Emergencia medica (dolor severo, sangrado, accidente)
-• Pregunta que no puedes resolver (resultado de examen, historial medico)
-• EN NINGUN OTRO CASO
+• Pregunta sobre historial medico o resultados de examenes
 
-REGLAS MEDICAS:
-Si menciona dolor intenso, sangrado, accidente, fractura, fiebre:
-→ "Entiendo que es urgente. Llama a la clinica: ${clinic.phone}. Emergencias: 112."
-Si riesgo de vida: "Llama al 112 ahora. Es una emergencia medica."
+EMERGENCIAS:
+• Dolor intenso, sangrado, fractura, fiebre: "Entiendo que es urgente. Llama: ${clinic.phone}. Emergencias: 112."
+• Riesgo de vida: "Llama al 112 ahora."
 
-ESTILO:
-• Maximo 3 oraciones. Sin excepciones.
-• Directo y calido. Sin palabreria innecesaria.
-• Una sola pregunta al final, especifica.
-• No repitas lo que el paciente ya dijo.
-${context?.message_count === 0 || !context ? '\nEn este primer mensaje agrega: "Si prefieres hablar con alguien, escribe RECEPCION."' : ''}`;
+ESTILO: 3 oraciones maximo. Directo. Una sola pregunta especifica al final.
+${!context || context.message_count === 0 ? 'En este primer mensaje agrega: "Si prefieres hablar con alguien, escribe RECEPCION."' : ''}`;
 }
 
 // ─── LOG EVENT ────────────────────────────────────────────────
@@ -281,7 +277,7 @@ async function sbGet(path) {
     },
   });
   const text = await res.text();
-  if (!res.ok) throw new Error('Supabase GET ' + res.status + ': ' + text.substring(0, 200));
+  if (!res.ok) throw new Error('SB GET ' + res.status + ': ' + text.substring(0, 150));
   return text ? JSON.parse(text) : null;
 }
 
@@ -293,7 +289,7 @@ async function sbPost(path, body, prefer) {
       'apikey': SUPABASE_SERVICE_KEY,
       'Authorization': 'Bearer ' + SUPABASE_SERVICE_KEY,
       'Content-Type': 'application/json',
-      'Prefer': prefer || 'return=minimal',
+      'Prefer': prefer || 'return=representation',
     },
     body: JSON.stringify(body),
   });
@@ -303,7 +299,7 @@ async function sbPost(path, body, prefer) {
 }
 
 async function getClinic() {
-  const data = await sbGet('clinics?select=*&limit=1');
+  const data = await sbGet('clinics?select=*&active=eq.true&limit=1');
   return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
@@ -367,6 +363,63 @@ async function saveLead(clinicId, phone, name, treatment) {
   } catch (e) { /* silencioso */ }
 }
 
+// ─── GUARDAR RESERVA REAL ─────────────────────────────────────
+// El corazon de Sofia v3.9 — cita real en Supabase
+
+async function saveBooking(clinic, bookingData, mode, lang) {
+  const name = bookingData.name || 'Paciente WhatsApp';
+  const treatment = bookingData.treatments || bookingData.treatment || 'Consulta';
+  const day = bookingData.day || 'por confirmar';
+  const time = bookingData.time || 'por confirmar';
+  const phone = bookingData.phone || 'no proporcionado';
+
+  if (mode === 'automatic') {
+    // Modo automatico: INSERT directo en appointments
+    const result = await sbPost('appointments', {
+      clinic_id: clinic.id,
+      patient_name: name,
+      patient_phone: phone,
+      treatment,
+      appointment_date: day,
+      appointment_time: time,
+      status: 'confirmed',
+      source: 'whatsapp',
+      confirmed_by: 'sofia',
+      confirmed_at: new Date().toISOString(),
+    });
+    await logEvent('APPOINTMENT_CONFIRMED', { name, treatment, day, time, mode: 'automatic' }, phone);
+    return { mode: 'automatic', id: result?.[0]?.id };
+  } else {
+    // Modo manual: INSERT en pending_bookings para que recepcion revise
+    const result = await sbPost('pending_bookings', {
+      clinic_id: clinic.id,
+      patient_name: name,
+      patient_phone: phone,
+      treatment,
+      requested_day: day,
+      requested_time: time,
+      status: 'pending',
+    });
+    await logEvent('BOOKING_PENDING', { name, treatment, day, time, mode: 'manual' }, phone);
+
+    // Notificar al director de la clinica
+    if (clinic.director_phone || clinic.phone) {
+      const notifMsg = `📅 Nueva solicitud de cita en ${clinic.name}:
+• Paciente: ${name}
+• Tratamiento: ${treatment}
+• Dia: ${day} a las ${time}
+• WhatsApp: ${bookingData.phone || 'no dado'}
+Confirma o rechaza en el panel de CliniFlow.`;
+
+      try {
+        await sendMessage(clinic.director_phone || clinic.phone, notifMsg);
+      } catch (e) { /* silencioso */ }
+    }
+
+    return { mode: 'manual', id: result?.[0]?.id };
+  }
+}
+
 // ─── SEND WHATSAPP ────────────────────────────────────────────
 
 async function sendMessage(to, body) {
@@ -407,7 +460,7 @@ async function callClaude(systemPrompt, userMessage) {
     });
     if (!res.ok) {
       const err = await res.text();
-      throw new Error('Claude HTTP ' + res.status + ': ' + err.substring(0, 150));
+      throw new Error('Claude ' + res.status + ': ' + err.substring(0, 150));
     }
     const data = await res.json();
     return data.content[0].text;
@@ -455,7 +508,6 @@ module.exports = async function handler(req, res) {
 
     // Deduplicacion
     if (messageId && processedMessages.has(messageId)) {
-      await logEvent('DUPLICATE_IGNORED', { messageId }, phone);
       return res.status(200).json({ status: 'ok', note: 'duplicate' });
     }
     if (messageId) {
@@ -463,22 +515,19 @@ module.exports = async function handler(req, res) {
       if (processedMessages.size > 1000) processedMessages.clear();
     }
 
-    await logEvent('WEBHOOK_RECEIVED', { messageId, message: message.substring(0, 50) }, phone);
+    await logEvent('WEBHOOK_RECEIVED', { messageId, msg: message.substring(0, 50) }, phone);
 
     const rawLang = detectLanguage(message);
     const urgency = detectUrgency(message);
 
-    // Obtener datos en paralelo
     let clinic = null;
     try { clinic = await getClinic(); } catch (e) { /* handled below */ }
 
     if (!clinic) {
-      await logEvent('GET_CLINIC_NULL', {}, phone);
       await sendMessage(phone, getFallback(rawLang, null));
       return res.status(200).json({ status: 'ok', error: 'no clinic' });
     }
 
-    // Cargar todo en paralelo
     const [context, treatments, doctors, settings] = await Promise.all([
       getContext(clinic.id, phone),
       getTreatments(clinic.id),
@@ -486,28 +535,27 @@ module.exports = async function handler(req, res) {
       getSettings(clinic.id),
     ]);
 
-    // Idioma bloqueado desde el primer mensaje
     const lang = getLockedLang(context, rawLang);
 
-    // Estado de reserva actual
-    const prevBookingData = {
-      name:      context?.patient_name || null,
-      treatment: context?.context_json?.booking_treatment || null,
-      day:       context?.context_json?.booking_day || null,
-      time:      context?.context_json?.booking_time || null,
-      phone:     context?.context_json?.booking_phone || null,
+    // Estado actual de la reserva
+    const prevData = {
+      name:       context?.patient_name || null,
+      treatment:  context?.context_json?.booking_treatment || null,
+      treatments: context?.context_json?.booking_treatments || null,
+      day:        context?.context_json?.booking_day || null,
+      time:       context?.context_json?.booking_time || null,
+      phone:      context?.context_json?.booking_phone || null,
     };
 
-    // Extraer nuevos datos del mensaje actual
-    const bookingData = extractBookingData(message, prevBookingData);
-
-    // Actualizar nombre si viene del contacto WhatsApp
+    const bookingData = extractBookingData(message, prevData);
     if (!bookingData.name && contactName) bookingData.name = contactName;
     if (!bookingData.name) bookingData.name = extractName(message);
 
+    const currentState = getBookingState(bookingData);
+
     await logEvent('MESSAGE_PARSED', {
-      lang, urgency, booking_state: bookingState(bookingData),
-      knows: Object.entries(bookingData).filter(([,v]) => v).map(([k]) => k),
+      lang, urgency, state: currentState,
+      knows: Object.entries(bookingData).filter(([,v])=>v).map(([k])=>k),
     }, phone);
 
     // Urgencia vital
@@ -517,22 +565,41 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ status: 'ok', action: 'emergency' });
     }
 
-    // Comando RECEPCION
+    // RECEPCION
     if (/^recepcion|reception$/i.test(message.trim())) {
       const humanMsg = lang === 'es'
         ? `Perfecto! He notificado al equipo de ${clinic.name}. Te contactaran pronto en este chat.`
-        : `Got it! I've notified ${clinic.name} team. They'll contact you shortly.`;
+        : `Got it! ${clinic.name} team will contact you shortly.`;
       await sendMessage(phone, humanMsg);
       await saveMessage(clinic.id, phone, message, humanMsg, 'human_redirect');
       return res.status(200).json({ status: 'ok', action: 'human_redirect' });
     }
 
-    // Construir prompt con estado de conversacion
+    // ── DETECCION AUTOMATICA DE RESERVA COMPLETA ──────────
+    // Si el prompt de Claude va a confirmar, guardamos ANTES de enviar
+    let bookingResult = null;
+    if (currentState === 'ready_to_book' && settings?.sofia_can_book !== false) {
+      const bookingMode = settings?.booking_mode || 'manual';
+      // Verificar que no exista ya una reserva reciente para este paciente
+      const recentBooking = context?.context_json?.last_booking_at;
+      const tooRecent = recentBooking &&
+        (Date.now() - new Date(recentBooking).getTime()) < 60000; // 1 minuto
+
+      if (!tooRecent) {
+        try {
+          bookingResult = await saveBooking(clinic, bookingData, bookingMode, lang);
+        } catch (e) {
+          await logEvent('BOOKING_ERROR', { error: e.message }, phone);
+        }
+      }
+    }
+
+    // Construir prompt
     const systemPrompt = buildSofiaPrompt(
       clinic, context, lang, treatments, doctors, settings, bookingData
     );
 
-    await logEvent('CLAUDE_START', { lang, booking_state: bookingState(bookingData) }, phone);
+    await logEvent('CLAUDE_START', { lang, state: currentState }, phone);
 
     let sofiaResponse;
     try {
@@ -545,11 +612,11 @@ module.exports = async function handler(req, res) {
 
     if (urgency === 'urgent') {
       sofiaResponse = lang === 'es'
-        ? `Entiendo que es urgente. Para atencion inmediata llama a la clinica: ${clinic.phone}. Para cita prioritaria responde URGENTE.`
-        : `I understand this is urgent. Please call the clinic: ${clinic.phone} for immediate attention.`;
+        ? `Entiendo que es urgente. Llama a la clinica: ${clinic.phone}. Emergencias: 112.`
+        : `Urgent situation detected. Please call: ${clinic.phone}. Emergency: 112.`;
     }
 
-    // Enviar respuesta
+    // Enviar
     await logEvent('SEND_WHATSAPP_START', { preview: sofiaResponse.substring(0, 80) }, phone);
     try {
       await sendMessage(phone, sofiaResponse);
@@ -559,36 +626,51 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ status: 'ok', error: 'send failed' });
     }
 
-    // Guardar todo
     await saveMessage(clinic.id, phone, message, sofiaResponse, 'ai');
 
+    // Actualizar contexto con todos los datos de reserva
     const summary = (() => {
       const entry = `P: ${message.substring(0, 80)} | S: ${sofiaResponse.substring(0, 80)}`;
       if (!context?.summary_so_far) return entry;
       return context.summary_so_far.split('\n').slice(-2).concat(entry).join('\n');
     })();
 
+    const newContextJson = {
+      ...(context?.context_json || {}),
+      locked_lang:         lang,
+      booking_state:       currentState,
+      booking_treatment:   bookingData.treatment,
+      booking_treatments:  bookingData.treatments,
+      booking_day:         bookingData.day,
+      booking_time:        bookingData.time,
+      booking_phone:       bookingData.phone,
+    };
+
+    // Si se hizo una reserva, marcar el timestamp
+    if (bookingResult) {
+      newContextJson.last_booking_at = new Date().toISOString();
+      newContextJson.last_booking_id = bookingResult.id;
+      newContextJson.booking_state = 'booked';
+    }
+
     await upsertContext(clinic.id, phone, {
       patient_name: bookingData.name || context?.patient_name,
       last_intent: detectIntent(message),
       summary_so_far: summary,
       message_count: (context?.message_count || 0) + 1,
-      context_json: {
-        ...(context?.context_json || {}),
-        locked_lang:        lang,
-        booking_state:      bookingState(bookingData),
-        booking_treatment:  bookingData.treatment,
-        booking_day:        bookingData.day,
-        booking_time:       bookingData.time,
-        booking_phone:      bookingData.phone,
-      },
+      context_json: newContextJson,
     });
 
     if (!context) {
       await saveLead(clinic.id, phone, bookingData.name, detectTreatment(message));
     }
 
-    await logEvent('MESSAGE_PROCESSED_OK', { clinic: clinic.name, lang }, phone);
+    await logEvent('MESSAGE_PROCESSED_OK', {
+      clinic: clinic.name, lang,
+      booking_made: !!bookingResult,
+      booking_mode: bookingResult?.mode,
+    }, phone);
+
     return res.status(200).json({ status: 'ok' });
 
   } catch (error) {
