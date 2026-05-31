@@ -204,15 +204,17 @@ function App(){
   async function loadAll(){
     setLoading(true);
     try{
-      const [l,a,d,t,m]=await Promise.all([
+      const [l,a,p,d,t,m]=await Promise.all([
         dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("appointments",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
+        dbGet("pending_bookings",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("doctors",{eq:{clinic_id:clinic.id}}),
         dbGet("treatments",{eq:{clinic_id:clinic.id}}),
         dbGet("messages",{eq:{clinic_id:clinic.id},order:"created_at.asc",limit:50}),
       ]);
       setLeads(Array.isArray(l)?l:[]);
       setAppts(Array.isArray(a)?a:[]);
+      setPendingBookings(Array.isArray(p)?p:[]);
       setDoctors(Array.isArray(d)?d:[]);
       setTreats(Array.isArray(t)?t:[]);
       setMsgs(Array.isArray(m)?m:[]);
