@@ -30,13 +30,11 @@ select option{background:#1e293b;color:#fff}
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
-
 // ── CONFIG ──────────────────────────────────────────
 const SB_URL = "https://auklwgsdybtusxncfglo.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
 const AI_URL = "https://api.anthropic.com/v1/messages";
 const HDR = { apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "Content-Type":"application/json" };
-
 // ── SUPABASE ─────────────────────────────────────────
 async function dbGet(table, opts={}) {
   let url = `${SB_URL}/rest/v1/${table}?select=*`;
@@ -59,7 +57,6 @@ async function dbPatch(table,data,eq) {
   if(!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
   return r.json();
 }
-
 // ── SOFIA ────────────────────────────────────────────
 function sofiaPrompt(clinic,treatments=[]) {
   const list=treatments.map(t=>
@@ -74,7 +71,6 @@ RULE 3: Always end by offering to book an appointment.
 PRICES (use ONLY these):
 ${list||"Consultar en clínica"}`;
 }
-
 // ── UI ATOMS ─────────────────────────────────────────
 const C = {
   green:  ["rgba(34,197,94,.12)","#22c55e"],
@@ -112,7 +108,7 @@ function Btn({children,onClick,disabled,variant="primary",full,style={}}){
     success:{background:"linear-gradient(135deg,#059669,#10d9a0)",color:"#fff",border:"none"},
   };
   return <button onClick={onClick} disabled={disabled}
-    style={{padding:"10px 20px",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?.55:1,transition:"all .2s",width:full?"100%":"auto",...vs[variant],...style}}>
+    style={{padding:"10px 20px",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.55:1,transition:"all .2s",width:full?"100%":"auto",...vs[variant],...style}}>
     {children}
   </button>;
 }
@@ -128,14 +124,12 @@ function StatCard({icon,label,val,color,sub}){
     {sub&&<div style={{fontSize:11,color:"rgba(255,255,255,.25)",marginTop:2}}>{sub}</div>}
   </Card>;
 }
-
 // ── LOGIN ─────────────────────────────────────────────
 function Login({onLogin}){
   const [email,setEmail]=useState("demo@dentaldubrovnik.hr");
   const [pass,setPass]=useState("demo123");
   const [err,setErr]=useState("");
   const [loading,setLoading]=useState(false);
-
   async function login(){
     if(!email||!pass)return;
     setLoading(true);setErr("");
@@ -146,7 +140,6 @@ function Login({onLogin}){
     }catch(e){setErr("❌ "+e.message);}
     setLoading(false);
   }
-
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"radial-gradient(ellipse at 30% 50%,rgba(14,165,233,.08),transparent 60%),#04080f"}}>
     <div style={{width:"100%",maxWidth:420}} className="animate-in">
       <div style={{textAlign:"center",marginBottom:40}}>
@@ -174,7 +167,6 @@ function Login({onLogin}){
     </div>
   </div>;
 }
-
 // ── DASHBOARD APP ─────────────────────────────────────
 function App(){
   const [clinic,setClinic]=useState(null);
@@ -193,14 +185,12 @@ function App(){
   const [newLead,setNewLead]=useState({patient_name:"",patient_phone:"",treatment_interest:""});
   const [saving,setSaving]=useState(false);
   const [menuOpen,setMenuOpen]=useState(false);
+  const [confirmingId,setConfirmingId]=useState(null);
   const chatRef=useRef(null);
-
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
   useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:`Dobar dan! Ja sam Sofija iz ${clinic.name} 🦷 Kako vam mogu pomoći?`}]);},[treats]);
   useEffect(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight;},[chat]);
-
   function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3000);}
-
   async function loadAll(){
     setLoading(true);
     try{
@@ -221,7 +211,6 @@ function App(){
     }catch(e){boom("⚠️ "+e.message);}
     setLoading(false);
   }
-
   async function addLead(){
     if(!newLead.patient_name.trim())return;
     setSaving(true);
@@ -233,7 +222,6 @@ function App(){
     }catch(e){boom("❌ "+e.message);}
     setSaving(false);
   }
-
   async function updateLead(id,status){
     try{
       await dbPatch("leads",{status},{id});
@@ -241,7 +229,6 @@ function App(){
       boom("✅ Actualizado en Supabase");
     }catch(e){boom("❌ "+e.message);}
   }
-
   async function remind(id){
     try{
       await dbPatch("appointments",{reminded_48h:true},{id});
@@ -249,7 +236,20 @@ function App(){
       boom("📲 Recordatorio marcado");
     }catch(e){boom("❌ "+e.message);}
   }
-
+  async function confirmBooking(bookingId,action){
+    setConfirmingId(bookingId);
+    try{
+      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
+      const data=await r.json();
+      if(data.success){
+        const labels={confirm:"✅ Cita confirmada",reject:"❌ Solicitud rechazada",reschedule:"📅 Para reagendar"};
+        boom(labels[action]||"✅ Actualizado");
+        await loadAll();
+      }else{boom("Error: "+(data.error||"intenta de nuevo"));}
+    }catch(e){boom("Error: "+e.message);}
+    setConfirmingId(null);
+  }
   async function sendChat(){
     if(!chatIn.trim()||chatLoad)return;
     const um={role:"user",content:chatIn};
@@ -258,7 +258,7 @@ function App(){
     try{
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:chatIn,direction:"inbound"});
       const res=await fetch(AI_URL,{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,system:sofiaPrompt(clinic,treats),
+        body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:300,system:sofiaPrompt(clinic,treats),
           messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
       const data=await res.json();
       const reply=data.content?.[0]?.text||"...";
@@ -267,9 +267,8 @@ function App(){
     }catch(e){setChat(p=>[...p,{role:"assistant",content:"Error: "+e.message}]);}
     setChatLoad(false);
   }
-
   if(!clinic)return <Login onLogin={setClinic}/>;
-
+  const pendingCount=pendingBookings.filter(b=>b.status==="pending").length;
   const TABS=[
     {id:"dashboard",icon:"⚡",label:"Dashboard"},
     {id:"leads",    icon:"🎯",label:"Leads"},
@@ -280,7 +279,6 @@ function App(){
     {id:"sofia",    icon:"💬",label:"Sofía IA"},
   ];
   const SC={nuevo:"blue",calificado:"green",agendado:"purple",perdido:"red"};
-
   const Sidebar=()=><div style={{width:224,flexShrink:0,background:"rgba(255,255,255,.018)",borderRight:"1px solid rgba(255,255,255,.06)",display:"flex",flexDirection:"column",padding:"22px 0",position:"fixed",top:0,bottom:0,left:0,zIndex:100,overflowY:"auto"}}>
     <div style={{padding:"0 18px 18px"}}>
       <div style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
@@ -307,6 +305,7 @@ function App(){
         <span style={{fontSize:14}}>{t.icon}</span>
         <span style={{fontSize:13,fontWeight:tab===t.id?600:400,color:tab===t.id?"#60a5fa":"rgba(255,255,255,.4)"}}>{t.label}</span>
         {t.id==="leads"&&leads.length>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(59,130,246,.2)",color:"#60a5fa",padding:"1px 7px",borderRadius:10}}>{leads.length}</span>}
+        {t.id==="reservas"&&pendingCount>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(234,179,8,.25)",color:"#fbbf24",padding:"1px 7px",borderRadius:10,fontWeight:700}}>{pendingCount}</span>}
       </button>)}
     </nav>
     <div style={{padding:"12px 10px",borderTop:"1px solid rgba(255,255,255,.05)"}}>
@@ -315,24 +314,11 @@ function App(){
       </button>
     </div>
   </div>;
-
   return <div style={{display:"flex",minHeight:"100vh"}}>
     <Toast msg={toast}/>
-    {/* Mobile header */}
-    <div style={{display:"none",position:"fixed",top:0,left:0,right:0,height:60,background:"rgba(4,8,15,.95)",borderBottom:"1px solid rgba(255,255,255,.06)",zIndex:200,alignItems:"center",justifyContent:"space-between",padding:"0 16px",backdropFilter:"blur(20px)"}}>
-      <div style={{fontFamily:"'Syne',sans-serif",fontSize:18,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
-      <button onClick={()=>setMenuOpen(m=>!m)} style={{background:"none",border:"none",cursor:"pointer",padding:4}}>
-        <div style={{width:22,height:2,background:"#fff",marginBottom:5}}/>
-        <div style={{width:22,height:2,background:"#fff",marginBottom:5}}/>
-        <div style={{width:22,height:2,background:"#fff"}}/>
-      </button>
-    </div>
-
     <Sidebar/>
-
     <div style={{marginLeft:224,flex:1,padding:"30px 34px",minHeight:"100vh"}}>
       {loading?<Spinner/>:<>
-
       {/* DASHBOARD */}
       {tab==="dashboard"&&<div className="animate-in">
         <div style={{marginBottom:26}}>
@@ -342,7 +328,7 @@ function App(){
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
           <StatCard icon="🎯" label="Leads totales" val={leads.length} color="#3b82f6" sub={`${leads.filter(l=>l.status==="calificado").length} calificados`}/>
           <StatCard icon="📅" label="Citas activas" val={appts.filter(a=>a.status!=="cancelled").length} color="#22c55e" sub="agendadas"/>
-          <StatCard icon="👨‍⚕️" label="Doctores" val={doctors.length} color="#a855f7" sub="configurados"/>
+          <StatCard icon="📋" label="Solicitudes" val={pendingCount} color="#f59e0b" sub="pendientes de confirmar"/>
           <StatCard icon="💊" label="Tratamientos" val={treats.length} color="#f97316" sub="en catálogo"/>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
@@ -370,7 +356,6 @@ function App(){
           </Card>
         </div>
       </div>}
-
       {/* LEADS */}
       {tab==="leads"&&<div className="animate-in">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -412,7 +397,6 @@ function App(){
           </div>)}
         </Card>
       </div>}
-
       {/* CITAS */}
       {tab==="citas"&&<div className="animate-in">
         <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>📅 Citas reales</h1>
@@ -439,7 +423,75 @@ function App(){
           </div>)}
         </Card>
       </div>}
-
+      {/* RESERVAS */}
+      {tab==="reservas"&&<div className="animate-in">
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+          <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>📋 Reservas Pendientes</h1>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <span style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{pendingCount} pendientes · {pendingBookings.filter(b=>b.status==="confirmed").length} confirmadas</span>
+            <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>🔄 Actualizar</Btn>
+          </div>
+        </div>
+        {pendingCount===0&&<Card style={{marginBottom:20}}>
+          <div style={{padding:40,textAlign:"center",color:"rgba(255,255,255,.3)"}}>
+            <div style={{fontSize:32,marginBottom:8}}>✅</div>
+            <div style={{fontSize:14,fontWeight:600}}>No hay solicitudes pendientes</div>
+            <div style={{fontSize:12,marginTop:4}}>Las nuevas solicitudes de Sofía aparecerán aquí</div>
+          </div>
+        </Card>}
+        {pendingCount>0&&<>
+          <div style={{fontSize:11,fontWeight:700,color:"#fbbf24",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>⏳ Esperando confirmación</div>
+          <Card style={{marginBottom:20}}>
+            {pendingBookings.filter(b=>b.status==="pending").map((b,i,arr)=><div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"16px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.05)":"none"}}>
+              <div style={{width:42,height:42,borderRadius:"50%",background:"linear-gradient(135deg,#f59e0b,#d97706)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🦷</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:14,marginBottom:3}}>{b.patient_name||"Paciente"}</div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:14,flexWrap:"wrap"}}>
+                  <span>💊 {b.treatment||"—"}</span>
+                  <span>📆 {b.requested_day||"—"}</span>
+                  <span>🕐 {b.requested_time||"—"}</span>
+                  {b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>📱 {b.patient_phone}</span>}
+                </div>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.25)",marginTop:3}}>{b.created_at?new Date(b.created_at).toLocaleString("es"):""}</div>
+              </div>
+              <div style={{display:"flex",gap:8,flexShrink:0}}>
+                <button onClick={()=>confirmBooking(b.id,"confirm")} disabled={confirmingId===b.id}
+                  style={{padding:"8px 16px",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",opacity:confirmingId===b.id?0.6:1,whiteSpace:"nowrap"}}>
+                  {confirmingId===b.id?"...":"✅ Confirmar"}
+                </button>
+                <button onClick={()=>confirmBooking(b.id,"reschedule")} disabled={confirmingId===b.id}
+                  style={{padding:"8px 12px",background:"rgba(59,130,246,.2)",border:"1px solid rgba(59,130,246,.3)",borderRadius:8,color:"#60a5fa",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>
+                  📅
+                </button>
+                <button onClick={()=>confirmBooking(b.id,"reject")} disabled={confirmingId===b.id}
+                  style={{padding:"8px 12px",background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:"#f87171",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>
+                  ❌
+                </button>
+              </div>
+            </div>)}
+          </Card>
+        </>}
+        {pendingBookings.filter(b=>b.status!=="pending").length>0&&<>
+          <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.35)",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>📁 Historial</div>
+          <Card>
+            {pendingBookings.filter(b=>b.status!=="pending").map((b,i,arr)=>{
+              const clr={
+                confirmed:{bg:"rgba(34,197,94,.1)",c:"#22c55e",l:"✅ Confirmada"},
+                rejected:{bg:"rgba(239,68,68,.1)",c:"#f87171",l:"❌ Rechazada"},
+                rescheduled:{bg:"rgba(59,130,246,.1)",c:"#60a5fa",l:"📅 Reagendada"}
+              }[b.status]||{bg:"rgba(255,255,255,.05)",c:"rgba(255,255,255,.4)",l:b.status};
+              return <div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"12px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:.75}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:13}}>{b.patient_name||"Paciente"}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>{b.treatment} · {b.requested_day} {b.requested_time}</div>
+                </div>
+                <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:clr.bg,color:clr.c}}>{clr.l}</span>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.25)",minWidth:80,textAlign:"right"}}>{b.confirmed_at?new Date(b.confirmed_at).toLocaleDateString("es"):""}</div>
+              </div>;
+            })}
+          </Card>
+        </>}
+      </div>}
       {/* DOCTORES */}
       {tab==="doctores"&&<div className="animate-in">
         <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>👨‍⚕️ Doctores</h1>
@@ -459,7 +511,6 @@ function App(){
           </div>
         </Card>)}
       </div>}
-
       {/* PRECIOS */}
       {tab==="precios"&&<div className="animate-in">
         <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>💰 Tratamientos y precios</h1>
@@ -482,7 +533,6 @@ function App(){
           </div>)}
         </Card>
       </div>}
-
       {/* SOFIA */}
       {tab==="sofia"&&<div className="animate-in" style={{display:"grid",gridTemplateColumns:"1fr 360px",gap:20}}>
         <div>
@@ -522,17 +572,15 @@ function App(){
             <div style={{padding:"11px 13px",borderTop:"1px solid rgba(255,255,255,.06)",display:"flex",gap:8}}>
               <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder="Escribe en cualquier idioma..."
                 style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit"}}/>
-              <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?.5:1}}>➤</button>
+              <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.5:1}}>➤</button>
             </div>
           </Card>
         </div>
       </div>}
-
       </>}
     </div>
   </div>;
 }
-
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 </script>
 </body>
