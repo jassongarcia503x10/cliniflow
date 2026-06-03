@@ -33,7 +33,7 @@ const { useState, useEffect, useRef, useCallback } = React;
 // ── CONFIG ──────────────────────────────────────────
 const SB_URL = "https://auklwgsdybtusxncfglo.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
-const AI_URL = "https://api.anthropic.com/v1/messages";
+// Sofia chat uses /api/sofia-chat proxy (API key stays server-side)
 const HDR = { apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "Content-Type":"application/json" };
 // ── SUPABASE ─────────────────────────────────────────
 async function dbGet(table, opts={}) {
@@ -291,14 +291,14 @@ function App(){
     setChat(next);setChatIn("");setChatLoad(true);
     try{
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:chatIn,direction:"inbound"});
-      const res=await fetch(AI_URL,{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:300,system:sofiaPrompt(clinic,treats),
-          messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
-      const data=await res.json();
-      const reply=data.content?.[0]?.text||"...";
+      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({clinic_id:clinic.id,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+      if(!r.ok){const e=await r.json();throw new Error(e.error||r.status);}
+      const data=await r.json();
+      const reply=data.text||"...";
       setChat(p=>[...p,{role:"assistant",content:reply}]);
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofía IA",patient_phone:"sofia",content:reply,direction:"outbound"});
-    }catch(e){setChat(p=>[...p,{role:"assistant",content:"Error: "+e.message}]);}
+    }catch(e){setChat(p=>[...p,{role:"assistant",content:"❌ "+e.message}]);}
     setChatLoad(false);
   }
   if(!clinic)return <Login onLogin={setClinic}/>;
