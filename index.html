@@ -184,6 +184,9 @@ function App(){
   const [chatLoad,setChatLoad]=useState(false);
   const [newLead,setNewLead]=useState({patient_name:"",patient_phone:"",treatment_interest:""});
   const [saving,setSaving]=useState(false);
+  const [editTreat,setEditTreat]=useState(null);
+  const [treatForm,setTreatForm]=useState({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});
+  const [savingTreat,setSavingTreat]=useState(false);
   const [menuOpen,setMenuOpen]=useState(false);
   const [confirmingId,setConfirmingId]=useState(null);
   const chatRef=useRef(null);
@@ -249,6 +252,37 @@ function App(){
       }else{boom("Error: "+(data.error||"intenta de nuevo"));}
     }catch(e){boom("Error: "+e.message);}
     setConfirmingId(null);
+  }
+  async function saveTreatment(){
+    if(!treatForm.name.trim()||!treatForm.price)return;
+    setSavingTreat(true);
+    try{
+      if(editTreat){
+        await dbPatch("treatments",{name:treatForm.name,price:parseFloat(treatForm.price),price_mode:treatForm.price_mode,duration:parseInt(treatForm.duration)||30,active:treatForm.active},{id:editTreat});
+        boom("✅ Tratamiento actualizado");
+      }else{
+        await dbPost("treatments",{...treatForm,price:parseFloat(treatForm.price),duration:parseInt(treatForm.duration)||30,clinic_id:clinic.id,created_at:new Date().toISOString()});
+        boom("✅ Tratamiento creado");
+      }
+      setEditTreat(null);
+      setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});
+      await loadAll();
+    }catch(e){boom("❌ "+e.message);}
+    setSavingTreat(false);
+  }
+  async function deleteTreatment(id){
+    if(!confirm("¿Eliminar este tratamiento?"))return;
+    try{
+      const url=`${SB_URL}/rest/v1/treatments?id=eq.${id}`;
+      const r=await fetch(url,{method:"DELETE",headers:HDR});
+      if(!r.ok)throw new Error(r.status);
+      boom("🗑️ Tratamiento eliminado");
+      await loadAll();
+    }catch(e){boom("❌ "+e.message);}
+  }
+  function startEditTreatment(t){
+    setEditTreat(t.id);
+    setTreatForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30,currency:t.currency||"€",active:t.active!==false});
   }
   async function sendChat(){
     if(!chatIn.trim()||chatLoad)return;
@@ -325,12 +359,24 @@ function App(){
           <div style={{fontSize:12,color:"rgba(255,255,255,.3)",marginBottom:3}}>{new Date().toLocaleDateString("es",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,margin:0,letterSpacing:-1}}>{clinic.name} 🦷</h1>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
-          <StatCard icon="🎯" label="Leads totales" val={leads.length} color="#3b82f6" sub={`${leads.filter(l=>l.status==="calificado").length} calificados`}/>
-          <StatCard icon="📅" label="Citas activas" val={appts.filter(a=>a.status!=="cancelled").length} color="#22c55e" sub="agendadas"/>
-          <StatCard icon="📋" label="Solicitudes" val={pendingCount} color="#f59e0b" sub="pendientes de confirmar"/>
-          <StatCard icon="💊" label="Tratamientos" val={treats.length} color="#f97316" sub="en catálogo"/>
-        </div>
+        {(()=>{
+          const now=new Date();
+          const todayStr=now.toISOString().slice(0,10);
+          const monthStart=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-01";
+          const confirmed=appts.filter(a=>a.status==="confirmed");
+          const todayAppts=confirmed.filter(a=>(a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
+          const monthAppts=confirmed.filter(a=>(a.appointment_date||a.created_at||"")>=monthStart);
+          const monthRev=monthAppts.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
+          const todayRev=todayAppts.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
+          const curr=clinic.currency||"€";
+          const noShowRate=appts.length>0?Math.round((appts.filter(a=>a.status==="no_show").length/appts.length)*100):0;
+          return <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+            <StatCard icon="💰" label="Ingresos este mes" val={curr+monthRev.toLocaleString()} color="#22c55e" sub={curr+todayRev+" hoy"}/>
+            <StatCard icon="📅" label="Citas confirmadas" val={confirmed.length} color="#3b82f6" sub={todayAppts.length+" hoy"}/>
+            <StatCard icon="📋" label="Solicitudes" val={pendingCount} color="#f59e0b" sub="pendientes"/>
+            <StatCard icon="🎯" label="Leads activos" val={leads.filter(l=>l.status!=="perdido").length} color="#a855f7" sub={leads.filter(l=>l.status==="calificado").length+" calificados"}/>
+          </div>;
+        })()}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
           <Card>
             <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14}}>🎯 Últimos leads</div>
@@ -513,22 +559,54 @@ function App(){
       </div>}
       {/* PRECIOS */}
       {tab==="precios"&&<div className="animate-in">
-        <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>💰 Tratamientos y precios</h1>
-        <Card>
-          <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)"}}>
-            <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{treats.length} tratamientos · Sofía usa solo estos precios</span>
-          </div>
-          {treats.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>No hay tratamientos</div>}
-          {treats.map((t,i)=><div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",borderBottom:i<treats.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
-            <span style={{fontSize:24}}>{t.icon||"🦷"}</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14}}>{t.name}</div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{t.duration}min · {t.price_mode==="exact"?"Precio fijo":t.price_mode==="from"?"Desde...":"Valoración gratuita"}</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>💰 Tratamientos y precios</h1>
+          <Btn onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:clinic.currency||"€",active:true});}} variant="primary" style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo tratamiento</Btn>
+        </div>
+        <Card style={{padding:20,marginBottom:16}}>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:13,fontWeight:700,marginBottom:12,color:"rgba(255,255,255,.6)"}}>{editTreat?"✏️ Editando tratamiento":"➕ Nuevo tratamiento"}</div>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10,marginBottom:12}}>
+            <Inp placeholder="Nombre del tratamiento" value={treatForm.name} onChange={v=>setTreatForm(p=>({...p,name:v}))}/>
+            <Inp placeholder="Precio (ej: 80)" value={treatForm.price} onChange={v=>setTreatForm(p=>({...p,price:v}))}/>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Tipo de precio</label>
+              <select value={treatForm.price_mode} onChange={e=>setTreatForm(p=>({...p,price_mode:e.target.value}))}
+                style={{padding:"11px 10px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+                <option value="exact">Precio fijo</option>
+                <option value="from">Desde...</option>
+                <option value="consult">Consultar</option>
+              </select>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:20,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif"}}>
-                {t.price_mode==="consult"?"Consulta":`${clinic.currency}${t.price}${t.price_mode==="from"&&t.price_max?`–${clinic.currency}${t.price_max}`:""}`}
+            <Inp placeholder="Duración (min)" value={String(treatForm.duration)} onChange={v=>setTreatForm(p=>({...p,duration:v}))}/>
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <Btn onClick={saveTreatment} disabled={savingTreat||!treatForm.name||!treatForm.price} style={{fontSize:12,padding:"8px 16px"}}>
+              {savingTreat?"Guardando...":(editTreat?"💾 Actualizar":"💾 Guardar")}
+            </Btn>
+            {editTreat&&<Btn variant="ghost" onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});}} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>}
+          </div>
+        </Card>
+        <Card>
+          <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{treats.length} tratamientos · Sofía usa solo estos precios</span>
+            <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"3px 10px"}}>🔄</Btn>
+          </div>
+          {treats.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer tratamiento ↑</div>}
+          {treats.map((t,i)=><div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",borderBottom:i<treats.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:t.active===false?0.45:1}}>
+            <span style={{fontSize:22}}>🦷</span>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontWeight:600,fontSize:14}}>{t.name}</span>
+                {t.active===false&&<Badge c="red">Inactivo</Badge>}
               </div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{t.duration||30}min · {t.price_mode==="exact"?"Precio fijo":t.price_mode==="from"?"Desde...":"Consultar"}</div>
+            </div>
+            <div style={{fontSize:19,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",minWidth:80,textAlign:"right"}}>
+              {t.price_mode==="consult"?"Consulta":(clinic.currency||"€")+t.price}
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>startEditTreatment(t)} style={{padding:"6px 12px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>✏️</button>
+              <button onClick={()=>deleteTreatment(t.id)} style={{padding:"6px 12px",background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",borderRadius:7,color:"#f87171",fontSize:12,cursor:"pointer"}}>🗑️</button>
             </div>
           </div>)}
         </Card>
