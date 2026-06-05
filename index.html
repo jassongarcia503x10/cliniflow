@@ -189,6 +189,7 @@ function App(){
   const [savingTreat,setSavingTreat]=useState(false);
   const [menuOpen,setMenuOpen]=useState(false);
   const [confirmingId,setConfirmingId]=useState(null);
+  const [sofiaMode,setSofiaMode]=useState("reception");
   const chatRef=useRef(null);
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
   useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:`Dobar dan! Ja sam Sofija iz ${clinic.name} 🦷 Kako vam mogu pomoći?`}]);},[treats]);
@@ -292,7 +293,7 @@ function App(){
     try{
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:chatIn,direction:"inbound"});
       const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({clinic_id:clinic.id,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+        body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
       if(!r.ok){const e=await r.json();throw new Error(e.error||r.status);}
       const data=await r.json();
       const reply=data.text||"...";
@@ -612,7 +613,19 @@ function App(){
         </Card>
       </div>}
       {/* SOFIA */}
-      {tab==="sofia"&&<div className="animate-in" style={{display:"grid",gridTemplateColumns:"1fr 360px",gap:20}}>
+      {tab==="sofia"&&<div className="animate-in">
+        {/* MODE SELECTOR */}
+        <div style={{display:"flex",gap:8,marginBottom:20,padding:"14px 18px",background:"rgba(255,255,255,.025)",borderRadius:14,border:"1px solid rgba(255,255,255,.07)",alignItems:"center"}}>
+          <span style={{fontSize:13,color:"rgba(255,255,255,.4)",marginRight:4}}>Modo Sofía:</span>
+          {[["reception","📞","Recepción","Citas y precios"],["doctor","🦷","Dr. Copiloto","Protocolos clínicos"],["reports","📊","Reportes","Métricas en tiempo real"]].map(([m,icon,label,sub])=>
+            <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofía, recepcionista de "+clinic.name+". ¿En qué puedo ayudarte?",doctor:"Buenos días doctor. Soy Sofía, tu copiloto clínico. ¿En qué procedimiento necesitas apoyo hoy?",reports:"Hola! Soy Sofía. Puedes preguntarme sobre citas, ingresos, leads o cualquier métrica de la clínica."}[m]}]);}}
+              style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,#0066ff,#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",transition:"all .2s",textAlign:"left"}}>
+              <div style={{fontSize:13,fontWeight:700}}>{icon} {label}</div>
+              <div style={{fontSize:10,opacity:.7,marginTop:1}}>{sub}</div>
+            </button>
+          )}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 380px",gap:20}}>
         <div>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 18px"}}>💬 Mensajes en Supabase</h1>
           <Card>
@@ -654,6 +667,7 @@ function App(){
             </div>
           </Card>
         </div>
+        </div>{/* end grid */}
       </div>}
       </>}
     </div>
