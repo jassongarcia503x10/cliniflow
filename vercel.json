@@ -2,12 +2,13 @@
   "crons": [
     {
       "path": "/api/send-reminders",
-      "schedule": "0 * * * *"
+      "schedule": "0 9 * * *"
     }
   ],
   "functions": {
     "api/whatsapp-webhook.js": { "maxDuration": 30 },
-    "api/confirm-booking.js":  { "maxDuration": 15 },
-    "api/send-reminders.js":   { "maxDuration": 30 }
+    "api/confirm-booking.js": { "maxDuration": 15 },
+    "api/send-reminders.js": { "maxDuration": 30 },
+    "api/sofia-chat.js": { "maxDuration": 30 }
   }
 }
