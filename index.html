@@ -11,140 +11,81 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#04080f;color:#f1f5f9;font-family:'Plus Jakarta Sans',sans-serif;overflow-x:hidden}
-::-webkit-scrollbar{width:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
 input::placeholder,textarea::placeholder{color:rgba(255,255,255,0.22)}
 select option{background:#1e293b;color:#fff}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-@keyframes slideIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+@keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}50%{box-shadow:0 0 0 8px rgba(239,68,68,0)}}
 .animate-in{animation:fadeIn .4s ease both}
 .spin{animation:spin .8s linear infinite}
 .pulse{animation:pulse 2s infinite}
+.mic-on{animation:micPulse 1.2s infinite}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
-// ── CONFIG ──────────────────────────────────────────
-const SB_URL = "https://auklwgsdybtusxncfglo.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
-// Sofia chat uses /api/sofia-chat proxy (API key stays server-side)
-const HDR = { apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}`, "Content-Type":"application/json" };
-// ── SUPABASE ─────────────────────────────────────────
-async function dbGet(table, opts={}) {
-  let url = `${SB_URL}/rest/v1/${table}?select=*`;
-  if(opts.eq) Object.entries(opts.eq).forEach(([k,v])=>url+=`&${k}=eq.${encodeURIComponent(v)}`);
-  if(opts.order) url+=`&order=${opts.order}`;
-  if(opts.limit) url+=`&limit=${opts.limit}`;
-  const r = await fetch(url,{headers:HDR});
-  if(!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+const{useState,useEffect,useRef}=React;
+const SB_URL="https://auklwgsdybtusxncfglo.supabase.co";
+const SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
+const HDR={apikey:SB_KEY,Authorization:"Bearer "+SB_KEY,"Content-Type":"application/json"};
+
+async function dbGet(table,opts){
+  opts=opts||{};
+  let url=SB_URL+"/rest/v1/"+table+"?select=*";
+  if(opts.eq)Object.entries(opts.eq).forEach(([k,v])=>{url+="&"+k+"=eq."+encodeURIComponent(v);});
+  if(opts.order)url+="&order="+opts.order;
+  if(opts.limit)url+="&limit="+opts.limit;
+  const r=await fetch(url,{headers:HDR});
+  if(!r.ok)throw new Error(r.status+": "+await r.text());
   return r.json();
 }
-async function dbPost(table,data) {
-  const r = await fetch(`${SB_URL}/rest/v1/${table}`,{method:"POST",headers:{...HDR,Prefer:"return=representation"},body:JSON.stringify(data)});
-  if(!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+async function dbPost(table,data){
+  const r=await fetch(SB_URL+"/rest/v1/"+table,{method:"POST",headers:Object.assign({},HDR,{Prefer:"return=representation"}),body:JSON.stringify(data)});
+  if(!r.ok)throw new Error(r.status+": "+await r.text());
   return r.json();
 }
-async function dbPatch(table,data,eq) {
-  let url=`${SB_URL}/rest/v1/${table}?`;
-  Object.entries(eq).forEach(([k,v])=>url+=`${k}=eq.${encodeURIComponent(v)}&`);
-  const r = await fetch(url,{method:"PATCH",headers:{...HDR,Prefer:"return=representation"},body:JSON.stringify(data)});
-  if(!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+async function dbPatch(table,data,eq){
+  let url=SB_URL+"/rest/v1/"+table+"?";
+  Object.entries(eq).forEach(([k,v])=>{url+=k+"=eq."+encodeURIComponent(v)+"&";});
+  const r=await fetch(url,{method:"PATCH",headers:Object.assign({},HDR,{Prefer:"return=representation"}),body:JSON.stringify(data)});
+  if(!r.ok)throw new Error(r.status+": "+await r.text());
   return r.json();
 }
-// ── SOFIA ────────────────────────────────────────────
-function sofiaPrompt(clinic,treatments=[]) {
-  const list=treatments.map(t=>
-    t.price_mode==="exact"  ?`- ${t.name}: ${clinic?.currency||"€"}${t.price}`:
-    t.price_mode==="from"   ?`- ${t.name}: desde ${clinic?.currency||"€"}${t.price}${t.price_max?` hasta ${clinic?.currency||"€"}${t.price_max}`:""} (varía)`:
-    `- ${t.name}: valoración gratuita`
-  ).join("\n");
-  return `You are Sofia, virtual dental assistant for ${clinic?.name||"the clinic"} in ${clinic?.city||""}.
-RULE 1: ALWAYS reply in the EXACT language the patient writes. No exceptions.
-RULE 2: Warm, brief, professional — max 2 sentences per reply.
-RULE 3: Always end by offering to book an appointment.
-PRICES (use ONLY these):
-${list||"Consultar en clínica"}`;
-}
-// ── UI ATOMS ─────────────────────────────────────────
-const C = {
-  green:  ["rgba(34,197,94,.12)","#22c55e"],
-  blue:   ["rgba(59,130,246,.12)","#60a5fa"],
-  yellow: ["rgba(234,179,8,.12)","#eab308"],
-  red:    ["rgba(239,68,68,.12)","#ef4444"],
-  purple: ["rgba(168,85,247,.12)","#c084fc"],
-  orange: ["rgba(249,115,22,.12)","#fb923c"],
+
+const C={
+  green:["rgba(34,197,94,.12)","#22c55e"],blue:["rgba(59,130,246,.12)","#60a5fa"],
+  yellow:["rgba(234,179,8,.12)","#eab308"],red:["rgba(239,68,68,.12)","#ef4444"],
+  purple:["rgba(168,85,247,.12)","#c084fc"],orange:["rgba(249,115,22,.12)","#fb923c"],
 };
-function Badge({c="blue",children}){
-  const [bg,tx]=C[c]||C.blue;
-  return <span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:bg,color:tx}}>{children}</span>;
-}
-function Spinner(){
-  return <div style={{display:"flex",justifyContent:"center",padding:48}}>
-    <div className="spin" style={{width:32,height:32,border:"3px solid rgba(255,255,255,.08)",borderTop:"3px solid #0ea5e9",borderRadius:"50%"}}/>
-  </div>;
-}
-function Toast({msg}){
-  if(!msg)return null;
-  return <div style={{position:"fixed",top:20,right:20,zIndex:9999,padding:"12px 20px",background:"rgba(34,197,94,.15)",border:"1px solid rgba(34,197,94,.3)",borderRadius:12,fontSize:13,color:"#22c55e",boxShadow:"0 10px 40px rgba(0,0,0,.5)",animation:"fadeIn .3s ease"}}>{msg}</div>;
-}
-function Inp({label,value,onChange,type="text",placeholder=""}){
-  return <div style={{display:"flex",flexDirection:"column",gap:5}}>
-    {label&&<label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{label}</label>}
-    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
-      style={{padding:"11px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:14,outline:"none",fontFamily:"inherit",width:"100%"}}/>
-  </div>;
-}
-function Btn({children,onClick,disabled,variant="primary",full,style={}}){
-  const vs={
-    primary:{background:"linear-gradient(135deg,#0066ff,#00d4ff)",color:"#fff",border:"none"},
-    ghost:{background:"transparent",color:"#60a5fa",border:"1px solid rgba(59,130,246,.3)"},
-    danger:{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)"},
-    success:{background:"linear-gradient(135deg,#059669,#10d9a0)",color:"#fff",border:"none"},
-  };
-  return <button onClick={onClick} disabled={disabled}
-    style={{padding:"10px 20px",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.55:1,transition:"all .2s",width:full?"100%":"auto",...vs[variant],...style}}>
-    {children}
-  </button>;
-}
-function Card({children,style={}}){
-  return <div style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:16,...style}}>{children}</div>;
-}
-function StatCard({icon,label,val,color,sub}){
-  return <Card style={{padding:"20px 22px",position:"relative",overflow:"hidden"}}>
-    <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${color},transparent)`}}/>
-    <div style={{fontSize:22,marginBottom:8}}>{icon}</div>
-    <div style={{fontSize:32,fontWeight:800,color,fontFamily:"'Syne',sans-serif"}}>{val}</div>
-    <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:3}}>{label}</div>
-    {sub&&<div style={{fontSize:11,color:"rgba(255,255,255,.25)",marginTop:2}}>{sub}</div>}
-  </Card>;
-}
-// ── LOGIN ─────────────────────────────────────────────
+function Badge({c,children}){const[bg,tx]=C[c||"blue"]||C.blue;return <span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:bg,color:tx}}>{children}</span>;}
+function Spinner(){return <div style={{display:"flex",justifyContent:"center",padding:48}}><div className="spin" style={{width:32,height:32,border:"3px solid rgba(255,255,255,.08)",borderTop:"3px solid #0ea5e9",borderRadius:"50%"}}/></div>;}
+function Toast({msg}){if(!msg)return null;return <div style={{position:"fixed",top:20,right:20,zIndex:9999,padding:"12px 20px",background:"rgba(34,197,94,.15)",border:"1px solid rgba(34,197,94,.3)",borderRadius:12,fontSize:13,color:"#22c55e",boxShadow:"0 10px 40px rgba(0,0,0,.5)",animation:"fadeIn .3s ease"}}>{msg}</div>;}
+function Inp({label,value,onChange,type,placeholder}){return <div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{label}</label>}<input type={type||"text"} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder||""} style={{padding:"11px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:14,outline:"none",fontFamily:"inherit",width:"100%"}}/></div>;}
+function Btn({children,onClick,disabled,variant,full,style}){const vs={primary:{background:"linear-gradient(135deg,#0066ff,#00d4ff)",color:"#fff",border:"none"},ghost:{background:"transparent",color:"#60a5fa",border:"1px solid rgba(59,130,246,.3)"},danger:{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)"},success:{background:"linear-gradient(135deg,#059669,#10d9a0)",color:"#fff",border:"none"}};return <button onClick={onClick} disabled={disabled} style={Object.assign({},{padding:"10px 20px",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.55:1,transition:"all .2s",width:full?"100%":"auto"},vs[variant||"primary"],style||{})}>{children}</button>;}
+function Card({children,style}){return <div style={Object.assign({},{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:16},style||{})}>{children}</div>;}
+function StatCard({icon,label,val,color,sub}){return <Card style={{padding:"20px 22px",position:"relative",overflow:"hidden"}}><div style={{position:"absolute",top:0,left:0,right:0,height:2,background:"linear-gradient(90deg,"+color+",transparent)"}}/><div style={{fontSize:22,marginBottom:8}}>{icon}</div><div style={{fontSize:32,fontWeight:800,color,fontFamily:"'Syne',sans-serif"}}>{val}</div><div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:3}}>{label}</div>{sub&&<div style={{fontSize:11,color:"rgba(255,255,255,.25)",marginTop:2}}>{sub}</div>}</Card>;}
+
 function Login({onLogin}){
-  const [email,setEmail]=useState("demo@dentaldubrovnik.hr");
-  const [pass,setPass]=useState("demo123");
-  const [err,setErr]=useState("");
-  const [loading,setLoading]=useState(false);
+  const[email,setEmail]=useState("demo@dentaldubrovnik.hr");
+  const[pass,setPass]=useState("demo123");
+  const[err,setErr]=useState("");
+  const[loading,setLoading]=useState(false);
   async function login(){
     if(!email||!pass)return;
     setLoading(true);setErr("");
-    try{
-      const rows=await dbGet("clinics",{eq:{email,password_hash:pass}});
-      if(rows?.length>0)onLogin(rows[0]);
-      else setErr("❌ Email o contraseña incorrectos");
-    }catch(e){setErr("❌ "+e.message);}
+    try{const rows=await dbGet("clinics",{eq:{email,password_hash:pass}});if(rows&&rows.length>0)onLogin(rows[0]);else setErr("❌ Email o contraseña incorrectos");}
+    catch(e){setErr("❌ "+e.message);}
     setLoading(false);
   }
   return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"radial-gradient(ellipse at 30% 50%,rgba(14,165,233,.08),transparent 60%),#04080f"}}>
     <div style={{width:"100%",maxWidth:420}} className="animate-in">
       <div style={{textAlign:"center",marginBottom:40}}>
         <div style={{fontFamily:"'Syne',sans-serif",fontSize:38,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
-        <div style={{fontSize:14,color:"rgba(255,255,255,.35)",marginTop:8}}>Sistema dental IA · Supabase {" "}<span style={{color:"#22c55e"}}>✅</span></div>
+        <div style={{fontSize:14,color:"rgba(255,255,255,.35)",marginTop:8}}>Sistema dental IA · Supabase <span style={{color:"#22c55e"}}>✅</span></div>
       </div>
       <Card style={{padding:36}}>
         <div style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,marginBottom:4}}>Iniciar sesión</div>
@@ -154,55 +95,57 @@ function Login({onLogin}){
           <Inp label="Contraseña" type="password" value={pass} onChange={setPass}/>
         </div>
         {err&&<div style={{padding:"10px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",borderRadius:8,fontSize:13,color:"#fca5a5",marginBottom:14}}>{err}</div>}
-        <Btn onClick={login} disabled={loading} full style={{padding:14,fontSize:15}}>
-          {loading?"Verificando...":"Entrar →"}
-        </Btn>
+        <Btn onClick={login} disabled={loading} full style={{padding:14,fontSize:15}}>{loading?"Verificando...":"Entrar →"}</Btn>
         <div style={{marginTop:18,padding:"14px 16px",background:"rgba(14,165,233,.05)",border:"1px solid rgba(14,165,233,.12)",borderRadius:10}}>
           <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginBottom:5}}>🔑 Cuenta demo:</div>
           <div style={{fontSize:13,color:"rgba(255,255,255,.7)",fontWeight:500}}>demo@dentaldubrovnik.hr</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Contraseña: demo123</div>
         </div>
       </Card>
-      <div style={{textAlign:"center",marginTop:14,fontSize:11,color:"rgba(255,255,255,.15)"}}>🔒 Supabase · West EU · Ireland</div>
     </div>
   </div>;
 }
-// ── DASHBOARD APP ─────────────────────────────────────
+
 function App(){
-  const [clinic,setClinic]=useState(null);
-  const [tab,setTab]=useState("dashboard");
-  const [leads,setLeads]=useState([]);
-  const [appts,setAppts]=useState([]);
-  const [pendingBookings,setPendingBookings]=useState([]);
-  const [doctors,setDoctors]=useState([]);
-  const [treats,setTreats]=useState([]);
-  const [msgs,setMsgs]=useState([]);
-  const [loading,setLoading]=useState(false);
-  const [toast,setToast]=useState("");
-  const [chat,setChat]=useState([]);
-  const [chatIn,setChatIn]=useState("");
-  const [chatLoad,setChatLoad]=useState(false);
-  const [newLead,setNewLead]=useState({patient_name:"",patient_phone:"",treatment_interest:""});
-  const [saving,setSaving]=useState(false);
-  const [editTreat,setEditTreat]=useState(null);
-  const [treatForm,setTreatForm]=useState({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});
-  const [savingTreat,setSavingTreat]=useState(false);
-  const [menuOpen,setMenuOpen]=useState(false);
-  const [confirmingId,setConfirmingId]=useState(null);
-  const [sofiaMode,setSofiaMode]=useState("reception");
-  const [voiceActive,setVoiceActive]=useState(false);
-  const [voiceStatus,setVoiceStatus]=useState("idle");
-  const [voiceError,setVoiceError]=useState("");
-  const [voiceSupported]=useState(!!(window.SpeechRecognition||window.webkitSpeechRecognition));
+  const[clinic,setClinic]=useState(null);
+  const[tab,setTab]=useState("dashboard");
+  const[leads,setLeads]=useState([]);
+  const[appts,setAppts]=useState([]);
+  const[pendingBookings,setPendingBookings]=useState([]);
+  const[doctors,setDoctors]=useState([]);
+  const[treats,setTreats]=useState([]);
+  const[msgs,setMsgs]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[toast,setToast]=useState("");
+  const[chat,setChat]=useState([]);
+  const[chatIn,setChatIn]=useState("");
+  const[chatLoad,setChatLoad]=useState(false);
+  const[newLead,setNewLead]=useState({patient_name:"",patient_phone:"",treatment_interest:""});
+  const[saving,setSaving]=useState(false);
+  const[confirmingId,setConfirmingId]=useState(null);
+  const[editTreat,setEditTreat]=useState(null);
+  const[treatForm,setTreatForm]=useState({name:"",price:"",price_mode:"exact",duration:30,active:true});
+  const[savingTreat,setSavingTreat]=useState(false);
+  const[sofiaMode,setSofiaMode]=useState("reception");
+  // ── VOZ JARVIS ──
+  const[mic,setMic]=useState(false);
+  const[micStatus,setMicStatus]=useState("");
   const chatRef=useRef(null);
+
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
-  useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:`Dobar dan! Ja sam Sofija iz ${clinic.name} 🦷 Kako vam mogu pomoći?`}]);},[treats]);
+  useEffect(()=>{
+    if(clinic&&treats.length>0){
+      setChat([{role:"assistant",content:"Hola! Soy Sofía de "+clinic.name+". ¿En qué puedo ayudarte?"}]);
+    }
+  },[treats]);
   useEffect(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight;},[chat]);
-  function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3000);}
+
+  function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3500);}
+
   async function loadAll(){
     setLoading(true);
     try{
-      const [l,a,p,d,t,m]=await Promise.all([
+      const[l,a,p,d,t,m]=await Promise.all([
         dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("appointments",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("pending_bookings",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
@@ -210,283 +153,159 @@ function App(){
         dbGet("treatments",{eq:{clinic_id:clinic.id}}),
         dbGet("messages",{eq:{clinic_id:clinic.id},order:"created_at.asc",limit:50}),
       ]);
-      setLeads(Array.isArray(l)?l:[]);
-      setAppts(Array.isArray(a)?a:[]);
-      setPendingBookings(Array.isArray(p)?p:[]);
-      setDoctors(Array.isArray(d)?d:[]);
-      setTreats(Array.isArray(t)?t:[]);
-      setMsgs(Array.isArray(m)?m:[]);
+      setLeads(Array.isArray(l)?l:[]);setAppts(Array.isArray(a)?a:[]);setPendingBookings(Array.isArray(p)?p:[]);
+      setDoctors(Array.isArray(d)?d:[]);setTreats(Array.isArray(t)?t:[]);setMsgs(Array.isArray(m)?m:[]);
     }catch(e){boom("⚠️ "+e.message);}
     setLoading(false);
   }
+
   async function addLead(){
-    if(!newLead.patient_name.trim())return;
-    setSaving(true);
-    try{
-      await dbPost("leads",{...newLead,clinic_id:clinic.id,status:"nuevo",score:Math.floor(Math.random()*35)+55});
-      setNewLead({patient_name:"",patient_phone:"",treatment_interest:""});
-      await loadAll();
-      boom("✅ Lead guardado en Supabase");
-    }catch(e){boom("❌ "+e.message);}
-    setSaving(false);
+    if(!newLead.patient_name.trim())return;setSaving(true);
+    try{await dbPost("leads",Object.assign({},newLead,{clinic_id:clinic.id,status:"nuevo",score:Math.floor(Math.random()*35)+55}));setNewLead({patient_name:"",patient_phone:"",treatment_interest:""});await loadAll();boom("✅ Lead guardado");}
+    catch(e){boom("❌ "+e.message);}setSaving(false);
   }
   async function updateLead(id,status){
-    try{
-      await dbPatch("leads",{status},{id});
-      setLeads(p=>p.map(l=>l.id===id?{...l,status}:l));
-      boom("✅ Actualizado en Supabase");
-    }catch(e){boom("❌ "+e.message);}
+    try{await dbPatch("leads",{status},{id});setLeads(p=>p.map(l=>l.id===id?Object.assign({},l,{status}):l));boom("✅ Actualizado");}
+    catch(e){boom("❌ "+e.message);}
   }
   async function remind(id){
-    try{
-      await dbPatch("appointments",{reminded_48h:true},{id});
-      setAppts(p=>p.map(a=>a.id===id?{...a,reminded_48h:true}:a));
-      boom("📲 Recordatorio marcado");
-    }catch(e){boom("❌ "+e.message);}
+    try{await dbPatch("appointments",{reminded_48h:true},{id});setAppts(p=>p.map(a=>a.id===id?Object.assign({},a,{reminded_48h:true}):a));boom("📲 Recordatorio marcado");}
+    catch(e){boom("❌ "+e.message);}
   }
   async function confirmBooking(bookingId,action){
     setConfirmingId(bookingId);
     try{
-      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
+      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
       const data=await r.json();
-      if(data.success){
-        const labels={confirm:"✅ Cita confirmada",reject:"❌ Solicitud rechazada",reschedule:"📅 Para reagendar"};
-        boom(labels[action]||"✅ Actualizado");
-        await loadAll();
-      }else{boom("Error: "+(data.error||"intenta de nuevo"));}
+      if(data.success){boom({confirm:"✅ Confirmada",reject:"❌ Rechazada",reschedule:"📅 Reagendada"}[action]||"✅ OK");await loadAll();}
+      else boom("Error: "+(data.error||"intenta de nuevo"));
     }catch(e){boom("Error: "+e.message);}
     setConfirmingId(null);
   }
   async function saveTreatment(){
-    if(!treatForm.name.trim()||!treatForm.price)return;
-    setSavingTreat(true);
+    if(!treatForm.name.trim()||!treatForm.price)return;setSavingTreat(true);
     try{
-      if(editTreat){
-        await dbPatch("treatments",{name:treatForm.name,price:parseFloat(treatForm.price),price_mode:treatForm.price_mode,duration:parseInt(treatForm.duration)||30,active:treatForm.active},{id:editTreat});
-        boom("✅ Tratamiento actualizado");
-      }else{
-        await dbPost("treatments",{...treatForm,price:parseFloat(treatForm.price),duration:parseInt(treatForm.duration)||30,clinic_id:clinic.id,created_at:new Date().toISOString()});
-        boom("✅ Tratamiento creado");
-      }
-      setEditTreat(null);
-      setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});
-      await loadAll();
-    }catch(e){boom("❌ "+e.message);}
-    setSavingTreat(false);
+      if(editTreat){await dbPatch("treatments",{name:treatForm.name,price:parseFloat(treatForm.price),price_mode:treatForm.price_mode,duration:parseInt(treatForm.duration)||30,active:treatForm.active},{id:editTreat});boom("✅ Actualizado");}
+      else{await dbPost("treatments",Object.assign({},treatForm,{price:parseFloat(treatForm.price),duration:parseInt(treatForm.duration)||30,clinic_id:clinic.id,created_at:new Date().toISOString()}));boom("✅ Creado");}
+      setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,active:true});await loadAll();
+    }catch(e){boom("❌ "+e.message);}setSavingTreat(false);
   }
   async function deleteTreatment(id){
-    if(!confirm("¿Eliminar este tratamiento?"))return;
-    try{
-      const url=`${SB_URL}/rest/v1/treatments?id=eq.${id}`;
-      const r=await fetch(url,{method:"DELETE",headers:HDR});
-      if(!r.ok)throw new Error(r.status);
-      boom("🗑️ Tratamiento eliminado");
-      await loadAll();
-    }catch(e){boom("❌ "+e.message);}
+    if(!confirm("¿Eliminar?"))return;
+    try{await fetch(SB_URL+"/rest/v1/treatments?id=eq."+id,{method:"DELETE",headers:HDR});boom("🗑️ Eliminado");await loadAll();}
+    catch(e){boom("❌ "+e.message);}
   }
-  function startEditTreatment(t){
-    setEditTreat(t.id);
-    setTreatForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30,currency:t.currency||"€",active:t.active!==false});
-  }
-  // ── ENVIAR MENSAJE DE TEXTO A SOFIA (compartido con voz) ───
-  async function sendMessageToSofia(text){
-    if(!text||!text.trim())return;
+
+  // ── SOFIA CHAT (texto + voz) ─────────────────────────────────
+  async function askSofia(text){
+    if(!text||!text.trim()||chatLoad)return;
     const um={role:"user",content:text};
-    const next=[...chat,um];
-    setChat(next);setChatIn("");setChatLoad(true);
+    const history=[...chat,um];
+    setChat(history);setChatIn("");setChatLoad(true);
     try{
       const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
-      if(!r.ok){const e=await r.json();throw new Error(e.error||r.status);}
+        body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:history.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+      if(!r.ok)throw new Error("sofia-chat error "+r.status);
       const data=await r.json();
       const reply=data.text||"...";
       setChat(p=>[...p,{role:"assistant",content:reply}]);
-      // TTS: Sofia responde en voz
+      // TTS — Sofia habla
       if(window.speechSynthesis){
         window.speechSynthesis.cancel();
-        const utt=new SpeechSynthesisUtterance(reply.replace(/[*_#]/g,""));
-        utt.lang="es-ES";utt.rate=0.92;utt.pitch=1.05;utt.volume=1;
+        const utt=new window.SpeechSynthesisUtterance(reply.replace(/[*_#]/g,"").substring(0,300));
+        utt.lang="es-ES";utt.rate=0.93;utt.pitch=1.08;
         const voices=window.speechSynthesis.getVoices();
-        const es=voices.find(v=>v.lang.startsWith("es")&&v.name.toLowerCase().includes("female"))
-               ||voices.find(v=>v.lang.startsWith("es"))
-               ||null;
-        if(es)utt.voice=es;
+        const esVoice=voices.find(v=>v.lang.startsWith("es")&&v.name.toLowerCase().includes("female"))||voices.find(v=>v.lang.startsWith("es"));
+        if(esVoice)utt.voice=esVoice;
         window.speechSynthesis.speak(utt);
       }
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:text,direction:"inbound"});
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofía IA",patient_phone:"sofia",content:reply,direction:"outbound"});
-    }catch(e){
-      setChat(p=>[...p,{role:"assistant",content:"❌ Error: "+e.message}]);
-    }
+    }catch(e){setChat(p=>[...p,{role:"assistant",content:"❌ "+e.message}]);}
     setChatLoad(false);
   }
+  function sendChat(){if(!chatIn.trim()||chatLoad)return;askSofia(chatIn);}
 
-  // ── TEST MICRÓFONO (diagnóstico separado) ─────────────────
-  async function testMicrophone(){
-    setVoiceError("");
-    setVoiceStatus("testing");
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      stream.getTracks().forEach(t=>t.stop());
-      setVoiceStatus("idle");
-      boom("✅ Micrófono detectado y con permiso");
-    }catch(err){
-      const msgs={
-        NotAllowedError:"Permiso denegado. Ve a Configuración del sitio y permite el micrófono.",
-        NotFoundError:"No se encontró micrófono. Conecta uno y recarga.",
-        NotReadableError:"Otro programa está usando el micrófono.",
-        OverconstrainedError:"Micrófono no cumple los requisitos.",
-      };
-      const msg=msgs[err.name]||("Error: "+err.name+" — "+err.message);
-      setVoiceError(msg);
-      setVoiceStatus("error");
-      boom("❌ "+msg);
-    }
-  }
-
-  // ── VOZ JARVIS — robusto con diagnóstico detallado ─────────
-  function toggleVoice(){
-    // Si está escuchando, detener
-    if(voiceActive){
-      setVoiceActive(false);
-      setVoiceStatus("idle");
-      window.speechSynthesis&&window.speechSynthesis.cancel();
-      return;
-    }
-
-    // Verificar soporte
+  // ── MICRÓFONO JARVIS ─────────────────────────────────────────
+  function toggleMic(){
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){
-      const msg="Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.";
-      setVoiceError(msg);
-      setVoiceStatus("error");
-      boom("❌ "+msg);
-      return;
-    }
-
-    setVoiceError("");
-    setVoiceStatus("listening");
-    setVoiceActive(true);
-
+    if(!SR){boom("❌ Usa Chrome o Edge para voz");return;}
+    if(mic){setMic(false);setMicStatus("");return;}
     const rec=new SR();
-    rec.lang="es-ES";
-    rec.continuous=false;
-    rec.interimResults=false;
-    rec.maxAlternatives=1;
-
-    rec.onstart=()=>{
-      setVoiceStatus("listening");
-    };
-
-    rec.onspeechstart=()=>{
-      setVoiceStatus("hearing");
-    };
-
+    rec.lang="es-ES";rec.continuous=false;rec.interimResults=false;
+    setMic(true);setMicStatus("🎙️ Escuchando...");
+    rec.onstart=()=>setMicStatus("🎙️ Escuchando...");
+    rec.onspeechstart=()=>setMicStatus("🔊 Detectando voz...");
     rec.onresult=(e)=>{
-      const transcript=e.results[0][0].transcript.trim();
-      const confidence=Math.round(e.results[0][0].confidence*100);
-      setVoiceStatus("processing");
-      setVoiceActive(false);
-      if(transcript){
-        sendMessageToSofia(transcript);
-      }
+      const t=e.results[0][0].transcript.trim();
+      setMic(false);setMicStatus("⚙️ Procesando: "+t.substring(0,40)+"...");
+      if(t)askSofia(t);
+      setTimeout(()=>setMicStatus(""),3000);
     };
-
     rec.onerror=(e)=>{
-      setVoiceActive(false);
-      const errorMessages={
-        "no-speech":        "No detecté audio. Habla más cerca del micrófono y vuelve a intentar.",
-        "audio-capture":    "No se pudo acceder al micrófono. Verifica que esté conectado.",
-        "not-allowed":      "Permiso denegado. Haz clic en el candado del navegador y permite el micrófono.",
-        "network":          "Error de red en el servicio de reconocimiento. Verifica tu conexión.",
-        "service-not-allowed":"El servicio de voz no está disponible en este navegador o contexto.",
-        "aborted":          "Reconocimiento cancelado.",
-        "bad-grammar":      "Error de configuración de gramática.",
-        "language-not-supported":"El idioma no está soportado.",
-      };
-      const msg=errorMessages[e.error]||("Error de voz: "+e.error);
-      setVoiceError(msg);
-      setVoiceStatus("error");
-      // Mostrar en el chat como mensaje del sistema
-      setChat(p=>[...p,{role:"assistant",content:"🎤 "+msg+" (código: "+e.error+")"}]);
+      setMic(false);
+      const msgs={"no-speech":"Sin audio detectado","not-allowed":"Permiso denegado — haz clic en el candado 🔒","audio-capture":"Micrófono no encontrado","network":"Error de red en servicio de voz","service-not-allowed":"Voz no disponible en este contexto"};
+      const msg=msgs[e.error]||("Error: "+e.error);
+      setMicStatus("❌ "+msg);
+      setChat(p=>[...p,{role:"assistant",content:"🎤 "+msg}]);
+      setTimeout(()=>setMicStatus(""),5000);
     };
-
-    rec.onend=()=>{
-      setVoiceActive(false);
-      if(voiceStatus==="listening"||voiceStatus==="hearing"){
-        setVoiceStatus("idle");
-      }
-    };
-
-    try{
-      rec.start();
-    }catch(err){
-      setVoiceActive(false);
-      setVoiceStatus("error");
-      const msg="No se pudo iniciar: "+err.message;
-      setVoiceError(msg);
-      boom("❌ "+msg);
-    }
+    rec.onend=()=>{setMic(false);};
+    try{rec.start();}catch(err){setMic(false);setMicStatus("❌ "+err.message);}
   }
-  async function sendChat(){
-    if(!chatIn.trim()||chatLoad)return;
-    const text=chatIn;
-    setChatIn("");
-    await sendMessageToSofia(text);
-  }
+
   if(!clinic)return <Login onLogin={setClinic}/>;
+
   const pendingCount=pendingBookings.filter(b=>b.status==="pending").length;
   const TABS=[
     {id:"dashboard",icon:"⚡",label:"Dashboard"},
-    {id:"leads",    icon:"🎯",label:"Leads"},
-    {id:"citas",    icon:"📅",label:"Citas"},
-    {id:"reservas", icon:"📋",label:"Reservas"},
-    {id:"doctores", icon:"👨‍⚕️",label:"Doctores"},
-    {id:"precios",  icon:"💰",label:"Precios"},
-    {id:"sofia",    icon:"💬",label:"Sofía IA"},
+    {id:"leads",icon:"🎯",label:"Leads"},
+    {id:"citas",icon:"📅",label:"Citas"},
+    {id:"reservas",icon:"📋",label:"Reservas"},
+    {id:"doctores",icon:"👨‍⚕️",label:"Doctores"},
+    {id:"precios",icon:"💰",label:"Precios"},
+    {id:"sofia",icon:"💬",label:"Sofía IA"},
   ];
   const SC={nuevo:"blue",calificado:"green",agendado:"purple",perdido:"red"};
-  const Sidebar=()=><div style={{width:224,flexShrink:0,background:"rgba(255,255,255,.018)",borderRight:"1px solid rgba(255,255,255,.06)",display:"flex",flexDirection:"column",padding:"22px 0",position:"fixed",top:0,bottom:0,left:0,zIndex:100,overflowY:"auto"}}>
-    <div style={{padding:"0 18px 18px"}}>
-      <div style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
-      <div style={{fontSize:9,color:"rgba(255,255,255,.2)",marginTop:1,letterSpacing:.5}}>SUPABASE REAL · PRODUCCIÓN</div>
-    </div>
-    <div style={{margin:"0 10px 12px",padding:"12px 14px",background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12}}>
-      <div style={{fontSize:18,marginBottom:3}}>🦷</div>
-      <div style={{fontSize:13,fontWeight:700}}>{clinic.name}</div>
-      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{clinic.city}</div>
-      <div style={{marginTop:7,display:"flex",gap:5,flexWrap:"wrap"}}>
-        <Badge c="green">● {(clinic.plan||"basic").toUpperCase()}</Badge>
-        <Badge c="blue">{clinic.currency}</Badge>
-      </div>
-    </div>
-    <div style={{margin:"0 10px 12px",padding:"9px 12px",background:"rgba(34,197,94,.04)",border:"1px solid rgba(34,197,94,.13)",borderRadius:10}}>
-      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:1}}>
-        <div className="pulse" style={{width:6,height:6,borderRadius:"50%",background:"#22c55e",boxShadow:"0 0 6px #22c55e"}}/>
-        <span style={{color:"#22c55e",fontWeight:600,fontSize:11}}>Supabase ✅ Activo</span>
-      </div>
-      <div style={{fontSize:10,color:"rgba(255,255,255,.22)"}}>West EU · Ireland · Healthy</div>
-    </div>
-    <nav style={{flex:1,padding:"0 8px"}}>
-      {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setMenuOpen(false);}} style={{width:"100%",textAlign:"left",padding:"9px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:9,background:tab===t.id?"rgba(0,100,255,.15)":"transparent",borderLeft:tab===t.id?"2px solid #3b82f6":"2px solid transparent"}}>
-        <span style={{fontSize:14}}>{t.icon}</span>
-        <span style={{fontSize:13,fontWeight:tab===t.id?600:400,color:tab===t.id?"#60a5fa":"rgba(255,255,255,.4)"}}>{t.label}</span>
-        {t.id==="leads"&&leads.length>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(59,130,246,.2)",color:"#60a5fa",padding:"1px 7px",borderRadius:10}}>{leads.length}</span>}
-        {t.id==="reservas"&&pendingCount>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(234,179,8,.25)",color:"#fbbf24",padding:"1px 7px",borderRadius:10,fontWeight:700}}>{pendingCount}</span>}
-      </button>)}
-    </nav>
-    <div style={{padding:"12px 10px",borderTop:"1px solid rgba(255,255,255,.05)"}}>
-      <button onClick={()=>setClinic(null)} style={{width:"100%",padding:"8px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.15)",borderRadius:8,color:"#ef4444",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
-        Cerrar sesión
-      </button>
-    </div>
-  </div>;
+
   return <div style={{display:"flex",minHeight:"100vh"}}>
     <Toast msg={toast}/>
-    <Sidebar/>
+    {/* SIDEBAR */}
+    <div style={{width:224,flexShrink:0,background:"rgba(255,255,255,.018)",borderRight:"1px solid rgba(255,255,255,.06)",display:"flex",flexDirection:"column",padding:"22px 0",position:"fixed",top:0,bottom:0,left:0,zIndex:100,overflowY:"auto"}}>
+      <div style={{padding:"0 18px 18px"}}>
+        <div style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
+        <div style={{fontSize:9,color:"rgba(255,255,255,.2)",marginTop:1,letterSpacing:.5}}>SUPABASE REAL · PRODUCCIÓN</div>
+      </div>
+      <div style={{margin:"0 10px 12px",padding:"12px 14px",background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12}}>
+        <div style={{fontSize:18,marginBottom:3}}>🦷</div>
+        <div style={{fontSize:13,fontWeight:700}}>{clinic.name}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{clinic.city}</div>
+        <div style={{marginTop:7,display:"flex",gap:5}}><Badge c="green">● {(clinic.plan||"basic").toUpperCase()}</Badge><Badge c="blue">{clinic.currency}</Badge></div>
+      </div>
+      <div style={{margin:"0 10px 12px",padding:"9px 12px",background:"rgba(34,197,94,.04)",border:"1px solid rgba(34,197,94,.13)",borderRadius:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:1}}>
+          <div className="pulse" style={{width:6,height:6,borderRadius:"50%",background:"#22c55e",boxShadow:"0 0 6px #22c55e"}}/>
+          <span style={{color:"#22c55e",fontWeight:600,fontSize:11}}>Supabase ✅ Activo</span>
+        </div>
+        <div style={{fontSize:10,color:"rgba(255,255,255,.22)"}}>West EU · Ireland</div>
+      </div>
+      <nav style={{flex:1,padding:"0 8px"}}>
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{width:"100%",textAlign:"left",padding:"9px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:9,background:tab===t.id?"rgba(0,100,255,.15)":"transparent",borderLeft:tab===t.id?"2px solid #3b82f6":"2px solid transparent"}}>
+          <span style={{fontSize:14}}>{t.icon}</span>
+          <span style={{fontSize:13,fontWeight:tab===t.id?600:400,color:tab===t.id?"#60a5fa":"rgba(255,255,255,.4)"}}>{t.label}</span>
+          {t.id==="leads"&&leads.length>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(59,130,246,.2)",color:"#60a5fa",padding:"1px 7px",borderRadius:10}}>{leads.length}</span>}
+          {t.id==="reservas"&&pendingCount>0&&<span style={{marginLeft:"auto",fontSize:10,background:"rgba(234,179,8,.25)",color:"#fbbf24",padding:"1px 7px",borderRadius:10,fontWeight:700}}>{pendingCount}</span>}
+        </button>)}
+      </nav>
+      <div style={{padding:"12px 10px",borderTop:"1px solid rgba(255,255,255,.05)"}}>
+        <button onClick={()=>setClinic(null)} style={{width:"100%",padding:"8px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.15)",borderRadius:8,color:"#ef4444",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesión</button>
+      </div>
+    </div>
+
+    {/* MAIN */}
     <div style={{marginLeft:224,flex:1,padding:"30px 34px",minHeight:"100vh"}}>
       {loading?<Spinner/>:<>
+
       {/* DASHBOARD */}
       {tab==="dashboard"&&<div className="animate-in">
         <div style={{marginBottom:26}}>
@@ -494,19 +313,16 @@ function App(){
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,margin:0,letterSpacing:-1}}>{clinic.name} 🦷</h1>
         </div>
         {(()=>{
-          const now=new Date();
-          const todayStr=now.toISOString().slice(0,10);
+          const now=new Date();const todayStr=now.toISOString().slice(0,10);
           const monthStart=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-01";
           const confirmed=appts.filter(a=>a.status==="confirmed");
-          const todayAppts=confirmed.filter(a=>(a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
-          const monthAppts=confirmed.filter(a=>(a.appointment_date||a.created_at||"")>=monthStart);
-          const monthRev=monthAppts.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
-          const todayRev=todayAppts.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
+          const todayA=confirmed.filter(a=>(a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
+          const monthA=confirmed.filter(a=>(a.appointment_date||a.created_at||"")>=monthStart);
+          const monthRev=monthA.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
           const curr=clinic.currency||"€";
-          const noShowRate=appts.length>0?Math.round((appts.filter(a=>a.status==="no_show").length/appts.length)*100):0;
           return <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
-            <StatCard icon="💰" label="Ingresos este mes" val={curr+monthRev.toLocaleString()} color="#22c55e" sub={curr+todayRev+" hoy"}/>
-            <StatCard icon="📅" label="Citas confirmadas" val={confirmed.length} color="#3b82f6" sub={todayAppts.length+" hoy"}/>
+            <StatCard icon="💰" label="Ingresos este mes" val={curr+monthRev.toLocaleString()} color="#22c55e" sub={curr+(todayA.reduce((s,a)=>s+(parseFloat(a.price)||0),0))+" hoy"}/>
+            <StatCard icon="📅" label="Citas confirmadas" val={confirmed.length} color="#3b82f6" sub={todayA.length+" hoy"}/>
             <StatCard icon="📋" label="Solicitudes" val={pendingCount} color="#f59e0b" sub="pendientes"/>
             <StatCard icon="🎯" label="Leads activos" val={leads.filter(l=>l.status!=="perdido").length} color="#a855f7" sub={leads.filter(l=>l.status==="calificado").length+" calificados"}/>
           </div>;
@@ -515,68 +331,49 @@ function App(){
           <Card>
             <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14}}>🎯 Últimos leads</div>
             {leads.slice(0,5).map((l,i)=><div key={l.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none"}}>
-              <div>
-                <div style={{fontSize:14,fontWeight:500}}>{l.patient_name}</div>
-                <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{l.treatment_interest||"—"}</div>
-              </div>
+              <div><div style={{fontSize:14,fontWeight:500}}>{l.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{l.treatment_interest||"—"}</div></div>
               <Badge c={SC[l.status]||"blue"}>{l.status}</Badge>
             </div>)}
-            {leads.length===0&&<div style={{padding:"20px",fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin leads aún</div>}
+            {leads.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin leads aún</div>}
           </Card>
           <Card>
             <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontFamily:"'Syne',sans-serif",fontWeight:700,fontSize:14}}>📅 Últimas citas</div>
             {appts.slice(0,5).map((a,i)=><div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none"}}>
-              <div>
-                <div style={{fontSize:14,fontWeight:500}}>{a.patient_name}</div>
-                <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment}</div>
-              </div>
+              <div><div style={{fontSize:14,fontWeight:500}}>{a.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment}</div></div>
               <div style={{fontSize:16,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif"}}>{clinic.currency}{a.price}</div>
             </div>)}
-            {appts.length===0&&<div style={{padding:"20px",fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin citas aún</div>}
+            {appts.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin citas aún</div>}
           </Card>
         </div>
       </div>}
+
       {/* LEADS */}
       {tab==="leads"&&<div className="animate-in">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>🎯 Leads reales</h1>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <Badge c="green">● {leads.length} en Supabase</Badge>
-            <Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>🔄 Sync</Btn>
-          </div>
+          <div style={{display:"flex",gap:8}}><Badge c="green">● {leads.length} en Supabase</Badge><Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>🔄 Sync</Btn></div>
         </div>
         <Card style={{padding:20,marginBottom:16}}>
           <div style={{fontFamily:"'Syne',sans-serif",fontSize:14,fontWeight:700,marginBottom:12}}>➕ Nuevo lead</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12}}>
-            <Inp placeholder="Nombre del paciente" value={newLead.patient_name} onChange={v=>setNewLead(p=>({...p,patient_name:v}))}/>
-            <Inp placeholder="Teléfono / WhatsApp" value={newLead.patient_phone} onChange={v=>setNewLead(p=>({...p,patient_phone:v}))}/>
-            <Inp placeholder="Tratamiento de interés" value={newLead.treatment_interest} onChange={v=>setNewLead(p=>({...p,treatment_interest:v}))}/>
+            <Inp placeholder="Nombre" value={newLead.patient_name} onChange={v=>setNewLead(p=>Object.assign({},p,{patient_name:v}))}/>
+            <Inp placeholder="Teléfono" value={newLead.patient_phone} onChange={v=>setNewLead(p=>Object.assign({},p,{patient_phone:v}))}/>
+            <Inp placeholder="Tratamiento" value={newLead.treatment_interest} onChange={v=>setNewLead(p=>Object.assign({},p,{treatment_interest:v}))}/>
           </div>
           <Btn onClick={addLead} disabled={saving||!newLead.patient_name}>{saving?"Guardando...":"💾 Guardar en Supabase"}</Btn>
         </Card>
         <Card>
-          {leads.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer lead arriba ↑</div>}
+          {leads.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer lead ↑</div>}
           {leads.map((l,i)=><div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 20px",borderBottom:i<leads.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
-            <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,flexShrink:0}}>
-              {(l.patient_name||"?").charAt(0).toUpperCase()}
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14}}>{l.patient_name}</div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{l.treatment_interest||"—"} · {l.patient_phone||"—"}</div>
-            </div>
-            <div style={{width:80}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,.3)",textAlign:"right",marginBottom:3}}>Score {l.score}%</div>
-              <div style={{height:3,background:"rgba(255,255,255,.06)",borderRadius:2}}>
-                <div style={{height:"100%",width:`${l.score}%`,background:l.score>79?"#22c55e":"#eab308",borderRadius:2}}/>
-              </div>
-            </div>
-            <select value={l.status} onChange={e=>updateLead(l.id,e.target.value)}
-              style={{padding:"6px 10px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:12,cursor:"pointer",outline:"none",fontFamily:"inherit"}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,flexShrink:0}}>{(l.patient_name||"?").charAt(0).toUpperCase()}</div>
+            <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{l.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{l.treatment_interest||"—"} · {l.patient_phone||"—"}</div></div>
+            <select value={l.status} onChange={e=>updateLead(l.id,e.target.value)} style={{padding:"6px 10px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:12,cursor:"pointer",outline:"none",fontFamily:"inherit"}}>
               {["nuevo","calificado","agendado","perdido"].map(s=><option key={s}>{s}</option>)}
             </select>
           </div>)}
         </Card>
       </div>}
+
       {/* CITAS */}
       {tab==="citas"&&<div className="animate-in">
         <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>📅 Citas reales</h1>
@@ -585,248 +382,212 @@ function App(){
             <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{appts.length} citas en Supabase</span>
             <Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"5px 12px"}}>🔄</Btn>
           </div>
-          {appts.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>No hay citas aún</div>}
+          {appts.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas aún</div>}
           {appts.map((a,i)=><div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 20px",borderBottom:i<appts.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
             <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#065f46,#10b981)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🦷</div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14}}>{a.patient_name}</div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment} · {a.patient_phone}</div>
-            </div>
+            <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{a.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment} · {a.patient_phone}</div></div>
             <div style={{fontSize:17,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif"}}>{clinic.currency}{a.price}</div>
-            <Badge c={a.status==="confirmed"?"green":a.status==="pending"?"yellow":"red"}>
-              {a.status==="confirmed"?"✅ Confirmada":a.status==="pending"?"⏳ Pendiente":"❌ Cancelada"}
-            </Badge>
-            {a.reminded_48h
-              ?<Badge c="green">📲 Enviado</Badge>
-              :<Btn onClick={()=>remind(a.id)} variant="ghost" style={{fontSize:11,padding:"5px 12px"}}>📲 Recordatorio</Btn>
-            }
+            <Badge c={a.status==="confirmed"?"green":a.status==="pending"?"yellow":"red"}>{a.status==="confirmed"?"✅ Confirmada":a.status==="pending"?"⏳ Pendiente":"❌ Cancelada"}</Badge>
+            {a.reminded_48h?<Badge c="green">📲 Enviado</Badge>:<Btn onClick={()=>remind(a.id)} variant="ghost" style={{fontSize:11,padding:"5px 12px"}}>📲 Recordatorio</Btn>}
           </div>)}
         </Card>
       </div>}
+
       {/* RESERVAS */}
       {tab==="reservas"&&<div className="animate-in">
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>📋 Reservas Pendientes</h1>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <span style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{pendingCount} pendientes · {pendingBookings.filter(b=>b.status==="confirmed").length} confirmadas</span>
-            <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>🔄 Actualizar</Btn>
+            <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>🔄</Btn>
           </div>
         </div>
-        {pendingCount===0&&<Card style={{marginBottom:20}}>
-          <div style={{padding:40,textAlign:"center",color:"rgba(255,255,255,.3)"}}>
-            <div style={{fontSize:32,marginBottom:8}}>✅</div>
-            <div style={{fontSize:14,fontWeight:600}}>No hay solicitudes pendientes</div>
-            <div style={{fontSize:12,marginTop:4}}>Las nuevas solicitudes de Sofía aparecerán aquí</div>
-          </div>
-        </Card>}
-        {pendingCount>0&&<>
-          <div style={{fontSize:11,fontWeight:700,color:"#fbbf24",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>⏳ Esperando confirmación</div>
-          <Card style={{marginBottom:20}}>
-            {pendingBookings.filter(b=>b.status==="pending").map((b,i,arr)=><div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"16px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.05)":"none"}}>
-              <div style={{width:42,height:42,borderRadius:"50%",background:"linear-gradient(135deg,#f59e0b,#d97706)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🦷</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:700,fontSize:14,marginBottom:3}}>{b.patient_name||"Paciente"}</div>
-                <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:14,flexWrap:"wrap"}}>
-                  <span>💊 {b.treatment||"—"}</span>
-                  <span>📆 {b.requested_day||"—"}</span>
-                  <span>🕐 {b.requested_time||"—"}</span>
-                  {b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>📱 {b.patient_phone}</span>}
-                </div>
-                <div style={{fontSize:10,color:"rgba(255,255,255,.25)",marginTop:3}}>{b.created_at?new Date(b.created_at).toLocaleString("es"):""}</div>
+        {pendingCount===0&&<Card style={{marginBottom:20}}><div style={{padding:40,textAlign:"center",color:"rgba(255,255,255,.3)"}}><div style={{fontSize:32,marginBottom:8}}>✅</div><div style={{fontSize:14,fontWeight:600}}>Sin solicitudes pendientes</div><div style={{fontSize:12,marginTop:4}}>Las solicitudes de Sofía aparecerán aquí</div></div></Card>}
+        {pendingCount>0&&<><div style={{fontSize:11,fontWeight:700,color:"#fbbf24",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>⏳ Esperando confirmación</div>
+        <Card style={{marginBottom:20}}>
+          {pendingBookings.filter(b=>b.status==="pending").map((b,i,arr)=><div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"16px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.05)":"none"}}>
+            <div style={{width:42,height:42,borderRadius:"50%",background:"linear-gradient(135deg,#f59e0b,#d97706)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🦷</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:14,marginBottom:3}}>{b.patient_name||"Paciente"}</div>
+              <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:14,flexWrap:"wrap"}}>
+                <span>💊 {b.treatment||"—"}</span><span>📆 {b.requested_day||"—"}</span><span>🕐 {b.requested_time||"—"}</span>
+                {b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>📱 {b.patient_phone}</span>}
               </div>
-              <div style={{display:"flex",gap:8,flexShrink:0}}>
-                <button onClick={()=>confirmBooking(b.id,"confirm")} disabled={confirmingId===b.id}
-                  style={{padding:"8px 16px",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",opacity:confirmingId===b.id?0.6:1,whiteSpace:"nowrap"}}>
-                  {confirmingId===b.id?"...":"✅ Confirmar"}
-                </button>
-                <button onClick={()=>confirmBooking(b.id,"reschedule")} disabled={confirmingId===b.id}
-                  style={{padding:"8px 12px",background:"rgba(59,130,246,.2)",border:"1px solid rgba(59,130,246,.3)",borderRadius:8,color:"#60a5fa",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>
-                  📅
-                </button>
-                <button onClick={()=>confirmBooking(b.id,"reject")} disabled={confirmingId===b.id}
-                  style={{padding:"8px 12px",background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:"#f87171",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>
-                  ❌
-                </button>
-              </div>
-            </div>)}
-          </Card>
-        </>}
+              <div style={{fontSize:10,color:"rgba(255,255,255,.25)",marginTop:3}}>{b.created_at?new Date(b.created_at).toLocaleString("es"):""}</div>
+            </div>
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              <button onClick={()=>confirmBooking(b.id,"confirm")} disabled={confirmingId===b.id} style={{padding:"8px 16px",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",opacity:confirmingId===b.id?0.6:1,whiteSpace:"nowrap"}}>{confirmingId===b.id?"...":"✅ Confirmar"}</button>
+              <button onClick={()=>confirmBooking(b.id,"reschedule")} disabled={confirmingId===b.id} style={{padding:"8px 12px",background:"rgba(59,130,246,.2)",border:"1px solid rgba(59,130,246,.3)",borderRadius:8,color:"#60a5fa",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>📅</button>
+              <button onClick={()=>confirmBooking(b.id,"reject")} disabled={confirmingId===b.id} style={{padding:"8px 12px",background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:"#f87171",fontSize:14,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>❌</button>
+            </div>
+          </div>)}
+        </Card></>}
         {pendingBookings.filter(b=>b.status!=="pending").length>0&&<>
           <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.35)",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>📁 Historial</div>
-          <Card>
-            {pendingBookings.filter(b=>b.status!=="pending").map((b,i,arr)=>{
-              const clr={
-                confirmed:{bg:"rgba(34,197,94,.1)",c:"#22c55e",l:"✅ Confirmada"},
-                rejected:{bg:"rgba(239,68,68,.1)",c:"#f87171",l:"❌ Rechazada"},
-                rescheduled:{bg:"rgba(59,130,246,.1)",c:"#60a5fa",l:"📅 Reagendada"}
-              }[b.status]||{bg:"rgba(255,255,255,.05)",c:"rgba(255,255,255,.4)",l:b.status};
-              return <div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"12px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:.75}}>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:13}}>{b.patient_name||"Paciente"}</div>
-                  <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>{b.treatment} · {b.requested_day} {b.requested_time}</div>
-                </div>
-                <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:clr.bg,color:clr.c}}>{clr.l}</span>
-                <div style={{fontSize:10,color:"rgba(255,255,255,.25)",minWidth:80,textAlign:"right"}}>{b.confirmed_at?new Date(b.confirmed_at).toLocaleDateString("es"):""}</div>
-              </div>;
-            })}
-          </Card>
+          <Card>{pendingBookings.filter(b=>b.status!=="pending").map((b,i,arr)=>{
+            const clr={confirmed:{bg:"rgba(34,197,94,.1)",c:"#22c55e",l:"✅ Confirmada"},rejected:{bg:"rgba(239,68,68,.1)",c:"#f87171",l:"❌ Rechazada"},rescheduled:{bg:"rgba(59,130,246,.1)",c:"#60a5fa",l:"📅 Reagendada"}}[b.status]||{bg:"rgba(255,255,255,.05)",c:"rgba(255,255,255,.4)",l:b.status};
+            return <div key={b.id} style={{display:"flex",alignItems:"center",gap:16,padding:"12px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:.75}}>
+              <div style={{flex:1}}><div style={{fontWeight:600,fontSize:13}}>{b.patient_name||"Paciente"}</div><div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>{b.treatment} · {b.requested_day} {b.requested_time}</div></div>
+              <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:clr.bg,color:clr.c}}>{clr.l}</span>
+              <div style={{fontSize:10,color:"rgba(255,255,255,.25)",minWidth:80,textAlign:"right"}}>{b.confirmed_at?new Date(b.confirmed_at).toLocaleDateString("es"):""}</div>
+            </div>;
+          })}</Card>
         </>}
       </div>}
+
       {/* DOCTORES */}
       {tab==="doctores"&&<div className="animate-in">
         <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 20px"}}>👨‍⚕️ Doctores</h1>
-        {doctors.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>No hay doctores configurados</div>}
+        {doctors.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin doctores configurados</div>}
         {doctors.map(d=><Card key={d.id} style={{padding:22,marginBottom:14}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
             <div style={{width:48,height:48,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,#3b82f6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>👨‍⚕️</div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:16}}>{d.name}</div>
-              <div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginTop:2}}>{d.specialty}</div>
-              <div style={{fontSize:12,color:"rgba(255,255,255,.25)",marginTop:3}}>{d.slots_per_day} citas/día · {d.work_days?.length||5} días/semana</div>
-            </div>
-            <div style={{textAlign:"center",padding:"10px 20px",background:"rgba(59,130,246,.09)",border:"1px solid rgba(59,130,246,.2)",borderRadius:12}}>
-              <div style={{fontSize:28,fontWeight:800,color:"#60a5fa",fontFamily:"'Syne',sans-serif"}}>{d.slots_per_day*(d.work_days?.length||5)}</div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>citas/semana</div>
-            </div>
+            <div style={{flex:1}}><div style={{fontWeight:700,fontSize:16}}>{d.name}</div><div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginTop:2}}>{d.specialty}</div></div>
           </div>
         </Card>)}
       </div>}
+
       {/* PRECIOS */}
       {tab==="precios"&&<div className="animate-in">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>💰 Tratamientos y precios</h1>
-          <Btn onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:clinic.currency||"€",active:true});}} variant="primary" style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo tratamiento</Btn>
+          <Btn onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,active:true});}} style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo</Btn>
         </div>
         <Card style={{padding:20,marginBottom:16}}>
-          <div style={{fontFamily:"'Syne',sans-serif",fontSize:13,fontWeight:700,marginBottom:12,color:"rgba(255,255,255,.6)"}}>{editTreat?"✏️ Editando tratamiento":"➕ Nuevo tratamiento"}</div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:13,fontWeight:700,marginBottom:12,color:"rgba(255,255,255,.6)"}}>{editTreat?"✏️ Editando":"➕ Nuevo tratamiento"}</div>
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10,marginBottom:12}}>
-            <Inp placeholder="Nombre del tratamiento" value={treatForm.name} onChange={v=>setTreatForm(p=>({...p,name:v}))}/>
-            <Inp placeholder="Precio (ej: 80)" value={treatForm.price} onChange={v=>setTreatForm(p=>({...p,price:v}))}/>
-            <div style={{display:"flex",flexDirection:"column",gap:5}}>
-              <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Tipo de precio</label>
-              <select value={treatForm.price_mode} onChange={e=>setTreatForm(p=>({...p,price_mode:e.target.value}))}
-                style={{padding:"11px 10px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
-                <option value="exact">Precio fijo</option>
-                <option value="from">Desde...</option>
-                <option value="consult">Consultar</option>
+            <Inp placeholder="Nombre del tratamiento" value={treatForm.name} onChange={v=>setTreatForm(p=>Object.assign({},p,{name:v}))}/>
+            <Inp placeholder="Precio" value={treatForm.price} onChange={v=>setTreatForm(p=>Object.assign({},p,{price:v}))}/>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}><label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Tipo</label>
+              <select value={treatForm.price_mode} onChange={e=>setTreatForm(p=>Object.assign({},p,{price_mode:e.target.value}))} style={{padding:"11px 10px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+                <option value="exact">Precio fijo</option><option value="from">Desde...</option><option value="consult">Consultar</option>
               </select>
             </div>
-            <Inp placeholder="Duración (min)" value={String(treatForm.duration)} onChange={v=>setTreatForm(p=>({...p,duration:v}))}/>
+            <Inp placeholder="Duración (min)" value={String(treatForm.duration)} onChange={v=>setTreatForm(p=>Object.assign({},p,{duration:v}))}/>
           </div>
-          <div style={{display:"flex",gap:10,alignItems:"center"}}>
-            <Btn onClick={saveTreatment} disabled={savingTreat||!treatForm.name||!treatForm.price} style={{fontSize:12,padding:"8px 16px"}}>
-              {savingTreat?"Guardando...":(editTreat?"💾 Actualizar":"💾 Guardar")}
-            </Btn>
-            {editTreat&&<Btn variant="ghost" onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,currency:"€",active:true});}} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>}
+          <div style={{display:"flex",gap:10}}>
+            <Btn onClick={saveTreatment} disabled={savingTreat||!treatForm.name||!treatForm.price} style={{fontSize:12,padding:"8px 16px"}}>{savingTreat?"Guardando...":(editTreat?"💾 Actualizar":"💾 Guardar")}</Btn>
+            {editTreat&&<Btn variant="ghost" onClick={()=>{setEditTreat(null);setTreatForm({name:"",price:"",price_mode:"exact",duration:30,active:true});}} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>}
           </div>
         </Card>
         <Card>
           <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between"}}>
-            <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{treats.length} tratamientos · Sofía usa solo estos precios</span>
+            <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{treats.length} tratamientos</span>
             <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"3px 10px"}}>🔄</Btn>
           </div>
           {treats.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer tratamiento ↑</div>}
           {treats.map((t,i)=><div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 20px",borderBottom:i<treats.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:t.active===false?0.45:1}}>
             <span style={{fontSize:22}}>🦷</span>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontWeight:600,fontSize:14}}>{t.name}</span>
-                {t.active===false&&<Badge c="red">Inactivo</Badge>}
-              </div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{t.duration||30}min · {t.price_mode==="exact"?"Precio fijo":t.price_mode==="from"?"Desde...":"Consultar"}</div>
-            </div>
-            <div style={{fontSize:19,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",minWidth:80,textAlign:"right"}}>
-              {t.price_mode==="consult"?"Consulta":(clinic.currency||"€")+t.price}
-            </div>
+            <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{t.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{t.duration||30}min · {t.price_mode==="exact"?"Fijo":t.price_mode==="from"?"Desde":"Consultar"}</div></div>
+            <div style={{fontSize:19,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",minWidth:80,textAlign:"right"}}>{t.price_mode==="consult"?"Consulta":(clinic.currency||"€")+t.price}</div>
             <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>startEditTreatment(t)} style={{padding:"6px 12px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>✏️</button>
+              <button onClick={()=>{setEditTreat(t.id);setTreatForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30,active:t.active!==false});}} style={{padding:"6px 12px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>✏️</button>
               <button onClick={()=>deleteTreatment(t.id)} style={{padding:"6px 12px",background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",borderRadius:7,color:"#f87171",fontSize:12,cursor:"pointer"}}>🗑️</button>
             </div>
           </div>)}
         </Card>
       </div>}
-      {/* SOFIA */}
+
+      {/* SOFIA IA */}
       {tab==="sofia"&&<div className="animate-in">
-        {/* MODE SELECTOR */}
-        <div style={{display:"flex",gap:8,marginBottom:20,padding:"14px 18px",background:"rgba(255,255,255,.025)",borderRadius:14,border:"1px solid rgba(255,255,255,.07)",alignItems:"center"}}>
-          <span style={{fontSize:13,color:"rgba(255,255,255,.4)",marginRight:4}}>Modo Sofía:</span>
-          {[["reception","📞","Recepción","Citas y precios"],["doctor","🦷","Dr. Copiloto","Protocolos clínicos"],["reports","📊","Reportes","Métricas en tiempo real"]].map(([m,icon,label,sub])=>
-            <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofía, recepcionista de "+clinic.name+". ¿En qué puedo ayudarte?",doctor:"Buenos días doctor. Soy Sofía, tu copiloto clínico. ¿En qué procedimiento necesitas apoyo hoy?",reports:"Hola! Soy Sofía. Puedes preguntarme sobre citas, ingresos, leads o cualquier métrica de la clínica."}[m]}]);}}
-              style={{padding:"8px 16px",borderRadius:10,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,#0066ff,#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",transition:"all .2s",textAlign:"left"}}>
-              <div style={{fontSize:13,fontWeight:700}}>{icon} {label}</div>
-              <div style={{fontSize:10,opacity:.7,marginTop:1}}>{sub}</div>
+        {/* SELECTOR DE MODO */}
+        <div style={{display:"flex",gap:8,marginBottom:20,padding:"14px 18px",background:"rgba(255,255,255,.025)",borderRadius:14,border:"1px solid rgba(255,255,255,.07)",alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:12,color:"rgba(255,255,255,.4)",marginRight:4,flexShrink:0}}>Modo:</span>
+          {[["reception","📞","Recepción"],["doctor","🦷","Dr. Copiloto"],["reports","📊","Reportes"]].map(([m,icon,label])=>
+            <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofía de "+clinic.name+". ¿En qué te ayudo?",doctor:"Buenos días doctor. Soy tu copiloto clínico. ¿En qué procedimiento te apoyo?",reports:"Hola! Puedo darte métricas de la clínica. ¿Qué quieres saber?"}[m]}]);}}
+              style={{padding:"7px 14px",borderRadius:10,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,#0066ff,#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",fontSize:13,fontWeight:sofiaMode===m?700:400,transition:"all .2s"}}>
+              {icon} {label}
             </button>
           )}
         </div>
+
         <div style={{display:"grid",gridTemplateColumns:"1fr 380px",gap:20}}>
-        <div>
-          <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:"0 0 18px"}}>💬 Mensajes en Supabase</h1>
-          <Card>
-            <div style={{padding:"13px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{msgs.length} mensajes guardados</span>
-              <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>🔄</Btn>
-            </div>
-            <div style={{maxHeight:440,overflowY:"auto",padding:"10px 14px"}}>
-              {msgs.length===0&&<div style={{textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:13,padding:24}}>Prueba el chat de Sofía →</div>}
-              {msgs.map(m=><div key={m.id} style={{display:"flex",justifyContent:m.direction==="outbound"?"flex-end":"flex-start",marginBottom:9}}>
-                <div style={{maxWidth:"80%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.direction==="outbound"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.direction==="outbound"?"linear-gradient(135deg,#0066ff,#0044cc)":"rgba(255,255,255,.07)"}}>
-                  <div style={{fontSize:10,color:"rgba(255,255,255,.35)",marginBottom:2}}>{m.patient_name}</div>
-                  {m.content}
+          {/* MENSAJES SUPABASE */}
+          <div>
+            <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:22,fontWeight:800,margin:"0 0 14px"}}>💬 Mensajes en Supabase</h1>
+            <Card>
+              <div style={{padding:"13px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{msgs.length} mensajes guardados</span>
+                <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>🔄</Btn>
+              </div>
+              <div style={{maxHeight:440,overflowY:"auto",padding:"10px 14px"}}>
+                {msgs.length===0&&<div style={{textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:13,padding:24}}>Prueba el chat de Sofía →</div>}
+                {msgs.map(m=><div key={m.id} style={{display:"flex",justifyContent:m.direction==="outbound"?"flex-end":"flex-start",marginBottom:9}}>
+                  <div style={{maxWidth:"80%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.direction==="outbound"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.direction==="outbound"?"linear-gradient(135deg,#0066ff,#0044cc)":"rgba(255,255,255,.07)"}}>
+                    <div style={{fontSize:10,color:"rgba(255,255,255,.35)",marginBottom:2}}>{m.patient_name}</div>
+                    {m.content}
+                  </div>
+                </div>)}
+              </div>
+            </Card>
+          </div>
+
+          {/* CHAT EN VIVO */}
+          <div>
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:14,fontWeight:700,marginBottom:10}}>🤖 Sofía en vivo · modo {sofiaMode}</div>
+            <Card>
+              <div style={{padding:"12px 16px",background:"rgba(0,100,255,.05)",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:34,height:34,borderRadius:"50%",background:"linear-gradient(135deg,#0066ff,#00d4ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>🦷</div>
+                <div>
+                  <div style={{fontWeight:700,fontSize:13}}>Sofía · {clinic.name}</div>
+                  <div style={{fontSize:10,color:"#22c55e"}}>● {sofiaMode==="reception"?"Recepcionista":sofiaMode==="doctor"?"Dr. Copiloto":"Reportes"}</div>
                 </div>
-              </div>)}
-            </div>
-          </Card>
-        </div>
-        <div>
-          <div style={{fontFamily:"'Syne',sans-serif",fontSize:14,fontWeight:700,marginBottom:10}}>🤖 Sofía en vivo</div>
-          <Card>
-            <div style={{padding:"12px 16px",background:"rgba(0,100,255,.05)",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",gap:10}}>
-              <div style={{width:34,height:34,borderRadius:"50%",background:"linear-gradient(135deg,#0066ff,#00d4ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>🦷</div>
-              <div>
-                <div style={{fontWeight:700,fontSize:13}}>Sofía · {clinic.name}</div>
-                <div style={{fontSize:10,color:"#22c55e"}}>● Mensajes → Supabase real</div>
+                {/* STATUS MICRÓFONO — siempre visible */}
+                {micStatus&&<div style={{marginLeft:"auto",fontSize:11,color:mic?"#22c55e":micStatus.startsWith("❌")?"#f87171":"#60a5fa",maxWidth:140,textAlign:"right"}}>{micStatus}</div>}
               </div>
-            </div>
-            <div ref={chatRef} style={{height:330,overflowY:"auto",padding:13,display:"flex",flexDirection:"column",gap:9}}>
-              {chat.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-                <div style={{maxWidth:"85%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?"linear-gradient(135deg,#0066ff,#0044cc)":"rgba(255,255,255,.07)"}}>{m.content}</div>
-              </div>)}
-              {chatLoad&&<div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:"rgba(255,255,255,.3)",animation:`bounce 1s ${i*.2}s infinite`}}/>)}</div>}
-            </div>
-            <div style={{padding:"8px 13px",borderTop:"1px solid rgba(255,255,255,.06)"}}>
-              {/* Status bar */}
-              {(voiceStatus!=="idle"||voiceError)&&<div style={{marginBottom:6,padding:"5px 10px",borderRadius:6,fontSize:11,display:"flex",alignItems:"center",gap:6,
-                background:voiceStatus==="error"?"rgba(239,68,68,.12)":voiceStatus==="listening"||voiceStatus==="hearing"?"rgba(34,197,94,.1)":"rgba(59,130,246,.1)",
-                color:voiceStatus==="error"?"#f87171":voiceStatus==="listening"||voiceStatus==="hearing"?"#22c55e":"#60a5fa"}}>
-                <span style={{animation:voiceStatus==="listening"||voiceStatus==="hearing"?"pulse 1s infinite":"none"}}>
-                  {voiceStatus==="listening"?"🎙️ Escuchando...":voiceStatus==="hearing"?"🔊 Detectando voz...":voiceStatus==="processing"?"⚙️ Procesando...":voiceStatus==="testing"?"🔍 Verificando micrófono...":"⚠️ "+voiceError}
-                </span>
-                {voiceStatus==="error"&&<button onClick={testMicrophone} style={{marginLeft:"auto",padding:"2px 8px",background:"rgba(239,68,68,.2)",border:"1px solid rgba(239,68,68,.3)",borderRadius:4,color:"#f87171",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>Probar micrófono</button>}
-              </div>}
-              {/* Input row */}
-              <div style={{display:"flex",gap:8}}>
-                <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder={voiceActive?"🎤 Escuchando...":"Escribe o usa el micrófono..."}
-                  style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid "+(voiceActive?"rgba(34,197,94,.4)":"rgba(255,255,255,.1)"),borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit",transition:"border-color .2s"}}/>
-                <button onClick={toggleVoice}
-                  title={voiceActive?"Detener":"Hablar con Sofía (Jarvis mode)"}
-                  style={{width:38,height:38,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
-                    background:voiceActive?"linear-gradient(135deg,#ef4444,#dc2626)":"rgba(255,255,255,.07)",
-                    border:"1px solid "+(voiceActive?"rgba(239,68,68,.6)":"rgba(255,255,255,.15)"),
-                    borderRadius:8,color:"#fff",fontSize:17,cursor:"pointer",
-                    boxShadow:voiceActive?"0 0 12px rgba(239,68,68,.4)":"none",
-                    animation:voiceActive?"pulse 1.5s infinite":"none",transition:"all .2s"}}>
-                  {voiceActive?"⏹":"🎤"}
-                </button>
-                <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()}
-                  style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.5:1,flexShrink:0}}>
-                  ➤
-                </button>
+
+              {/* MENSAJES */}
+              <div ref={chatRef} style={{height:320,overflowY:"auto",padding:13,display:"flex",flexDirection:"column",gap:9}}>
+                {chat.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                  <div style={{maxWidth:"88%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?"linear-gradient(135deg,#0066ff,#0044cc)":"rgba(255,255,255,.07)"}}>{m.content}</div>
+                </div>)}
+                {chatLoad&&<div style={{display:"flex",gap:4,padding:4}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:"rgba(255,255,255,.3)",animation:"bounce 1s "+(i*0.2)+"s infinite"}}/>)}</div>}
               </div>
-            </div>
-          </Card>
+
+              {/* INPUT + BOTÓN MICRÓFONO */}
+              <div style={{padding:"12px 14px",borderTop:"1px solid rgba(255,255,255,.08)"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input
+                    value={chatIn}
+                    onChange={e=>setChatIn(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&sendChat()}
+                    placeholder={mic?"🎙️ Escuchando...":"Escribe o habla con Sofía..."}
+                    style={{flex:1,padding:"10px 13px",background:"rgba(255,255,255,.06)",border:"1px solid "+(mic?"rgba(34,197,94,.5)":"rgba(255,255,255,.12)"),borderRadius:9,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit",transition:"border .2s"}}
+                  />
+                  {/* BOTÓN MICRÓFONO — siempre visible */}
+                  <button
+                    onClick={toggleMic}
+                    title={mic?"Detener micrófono":"Hablar con Sofía (Jarvis)"}
+                    className={mic?"mic-on":""}
+                    style={{
+                      width:42,height:42,flexShrink:0,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      background:mic?"#ef4444":"rgba(255,255,255,.1)",
+                      border:"2px solid "+(mic?"#ef4444":"rgba(255,255,255,.2)"),
+                      borderRadius:10,cursor:"pointer",fontSize:20,
+                      transition:"all .2s",
+                    }}
+                  >
+                    {mic?"⏹":"🎤"}
+                  </button>
+                  {/* BOTÓN ENVIAR */}
+                  <button
+                    onClick={sendChat}
+                    disabled={chatLoad||!chatIn.trim()}
+                    style={{width:42,height:42,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:9,color:"#fff",fontSize:18,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.4:1}}
+                  >
+                    ➤
+                  </button>
+                </div>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.25)",marginTop:6,textAlign:"center"}}>
+                  {mic?"🔴 Escuchando — habla ahora":"🎤 Jarvis · 🔊 Sofía responde en voz · Funciona en Chrome/Edge"}
+                </div>
+              </div>
+            </Card>
+          </div>
         </div>
-        </div>{/* end grid */}
       </div>}
+
       </>}
     </div>
   </div>;
