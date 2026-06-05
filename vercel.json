@@ -9,6 +9,7 @@
     "api/whatsapp-webhook.js": { "maxDuration": 30 },
     "api/confirm-booking.js": { "maxDuration": 15 },
     "api/send-reminders.js": { "maxDuration": 30 },
-    "api/sofia-chat.js": { "maxDuration": 30 }
+    "api/sofia-chat.js": { "maxDuration": 30 },
+    "api/sofia-report.js": { "maxDuration": 30 }
   }
 }
