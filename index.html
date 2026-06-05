@@ -323,7 +323,7 @@ function App(){
     rec.onend=()=>setVoiceActive(false);
     rec.start();
   }
-    async function sendChat(){
+  async function sendChat(){
     if(!chatIn.trim()||chatLoad)return;
     const um={role:"user",content:chatIn};
     const next=[...chat,um];
@@ -701,6 +701,9 @@ function App(){
             <div style={{padding:"11px 13px",borderTop:"1px solid rgba(255,255,255,.06)",display:"flex",gap:8}}>
               <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder="Escribe en cualquier idioma..."
                 style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit"}}/>
+              <button onClick={toggleVoice} title={voiceActive?"Detener":"Hablar con Sofía"} style={{padding:"9px 13px",background:voiceActive?"linear-gradient(135deg,#ef4444,#dc2626)":"rgba(255,255,255,.07)",border:"1px solid "+(voiceActive?"rgba(239,68,68,.5)":"rgba(255,255,255,.12)"),borderRadius:8,color:"#fff",fontSize:16,cursor:"pointer",flexShrink:0,animation:voiceActive?"pulse 1s infinite":"none",transition:"all .2s"}}>
+                {voiceActive?"⏹":"🎤"}
+              </button>
               <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.5:1}}>➤</button>
             </div>
           </Card>
