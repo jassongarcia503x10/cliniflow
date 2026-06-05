@@ -190,6 +190,8 @@ function App(){
   const [menuOpen,setMenuOpen]=useState(false);
   const [confirmingId,setConfirmingId]=useState(null);
   const [sofiaMode,setSofiaMode]=useState("reception");
+  const [voiceActive,setVoiceActive]=useState(false);
+  const [voiceSupported]=useState(typeof window!=="undefined"&&"webkitSpeechRecognition" in window||"SpeechRecognition" in window);
   const chatRef=useRef(null);
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
   useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:`Dobar dan! Ja sam Sofija iz ${clinic.name} 🦷 Kako vam mogu pomoći?`}]);},[treats]);
@@ -285,7 +287,43 @@ function App(){
     setEditTreat(t.id);
     setTreatForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30,currency:t.currency||"€",active:t.active!==false});
   }
-  async function sendChat(){
+  function toggleVoice(){
+    if(!voiceSupported)return boom("Tu navegador no soporta voz");
+    if(voiceActive){setVoiceActive(false);return;}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    const rec=new SR();
+    rec.lang="es-ES";rec.continuous=false;rec.interimResults=false;
+    setVoiceActive(true);
+    rec.onresult=async(e)=>{
+      const transcript=e.results[0][0].transcript;
+      setChatIn(transcript);
+      setVoiceActive(false);
+      // Auto-enviar después de capturar voz
+      const um={role:"user",content:transcript};
+      const next=[...chat,um];
+      setChat(next);setChatIn("");setChatLoad(true);
+      try{
+        const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+        const data=await r.json();
+        const reply=data.text||"...";
+        setChat(p=>[...p,{role:"assistant",content:reply}]);
+        // Text to speech - voz de Sofia
+        if(window.speechSynthesis){
+          const utt=new SpeechSynthesisUtterance(reply);
+          utt.lang="es-ES";utt.rate=0.95;utt.pitch=1.1;
+          window.speechSynthesis.speak(utt);
+        }
+        await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:transcript,direction:"inbound"});
+        await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofía IA",patient_phone:"sofia",content:reply,direction:"outbound"});
+      }catch(e){setChat(p=>[...p,{role:"assistant",content:"❌ "+e.message}]);}
+      setChatLoad(false);
+    };
+    rec.onerror=()=>{setVoiceActive(false);boom("No se pudo capturar audio");};
+    rec.onend=()=>setVoiceActive(false);
+    rec.start();
+  }
+    async function sendChat(){
     if(!chatIn.trim()||chatLoad)return;
     const um={role:"user",content:chatIn};
     const next=[...chat,um];
