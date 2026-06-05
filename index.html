@@ -191,7 +191,9 @@ function App(){
   const [confirmingId,setConfirmingId]=useState(null);
   const [sofiaMode,setSofiaMode]=useState("reception");
   const [voiceActive,setVoiceActive]=useState(false);
-  const [voiceSupported]=useState(typeof window!=="undefined"&&"webkitSpeechRecognition" in window||"SpeechRecognition" in window);
+  const [voiceStatus,setVoiceStatus]=useState("idle");
+  const [voiceError,setVoiceError]=useState("");
+  const [voiceSupported]=useState(!!(window.SpeechRecognition||window.webkitSpeechRecognition));
   const chatRef=useRef(null);
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
   useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:`Dobar dan! Ja sam Sofija iz ${clinic.name} 🦷 Kako vam mogu pomoći?`}]);},[treats]);
@@ -287,58 +289,151 @@ function App(){
     setEditTreat(t.id);
     setTreatForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30,currency:t.currency||"€",active:t.active!==false});
   }
-  function toggleVoice(){
-    if(!voiceSupported)return boom("Tu navegador no soporta voz");
-    if(voiceActive){setVoiceActive(false);return;}
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    const rec=new SR();
-    rec.lang="es-ES";rec.continuous=false;rec.interimResults=false;
-    setVoiceActive(true);
-    rec.onresult=async(e)=>{
-      const transcript=e.results[0][0].transcript;
-      setChatIn(transcript);
-      setVoiceActive(false);
-      // Auto-enviar después de capturar voz
-      const um={role:"user",content:transcript};
-      const next=[...chat,um];
-      setChat(next);setChatIn("");setChatLoad(true);
-      try{
-        const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
-        const data=await r.json();
-        const reply=data.text||"...";
-        setChat(p=>[...p,{role:"assistant",content:reply}]);
-        // Text to speech - voz de Sofia
-        if(window.speechSynthesis){
-          const utt=new SpeechSynthesisUtterance(reply);
-          utt.lang="es-ES";utt.rate=0.95;utt.pitch=1.1;
-          window.speechSynthesis.speak(utt);
-        }
-        await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:transcript,direction:"inbound"});
-        await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofía IA",patient_phone:"sofia",content:reply,direction:"outbound"});
-      }catch(e){setChat(p=>[...p,{role:"assistant",content:"❌ "+e.message}]);}
-      setChatLoad(false);
-    };
-    rec.onerror=()=>{setVoiceActive(false);boom("No se pudo capturar audio");};
-    rec.onend=()=>setVoiceActive(false);
-    rec.start();
-  }
-  async function sendChat(){
-    if(!chatIn.trim()||chatLoad)return;
-    const um={role:"user",content:chatIn};
+  // ── ENVIAR MENSAJE DE TEXTO A SOFIA (compartido con voz) ───
+  async function sendMessageToSofia(text){
+    if(!text||!text.trim())return;
+    const um={role:"user",content:text};
     const next=[...chat,um];
     setChat(next);setChatIn("");setChatLoad(true);
     try{
-      await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:chatIn,direction:"inbound"});
       const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
       if(!r.ok){const e=await r.json();throw new Error(e.error||r.status);}
       const data=await r.json();
       const reply=data.text||"...";
       setChat(p=>[...p,{role:"assistant",content:reply}]);
+      // TTS: Sofia responde en voz
+      if(window.speechSynthesis){
+        window.speechSynthesis.cancel();
+        const utt=new SpeechSynthesisUtterance(reply.replace(/[*_#]/g,""));
+        utt.lang="es-ES";utt.rate=0.92;utt.pitch=1.05;utt.volume=1;
+        const voices=window.speechSynthesis.getVoices();
+        const es=voices.find(v=>v.lang.startsWith("es")&&v.name.toLowerCase().includes("female"))
+               ||voices.find(v=>v.lang.startsWith("es"))
+               ||null;
+        if(es)utt.voice=es;
+        window.speechSynthesis.speak(utt);
+      }
+      await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:text,direction:"inbound"});
       await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofía IA",patient_phone:"sofia",content:reply,direction:"outbound"});
-    }catch(e){setChat(p=>[...p,{role:"assistant",content:"❌ "+e.message}]);}
+    }catch(e){
+      setChat(p=>[...p,{role:"assistant",content:"❌ Error: "+e.message}]);
+    }
     setChatLoad(false);
+  }
+
+  // ── TEST MICRÓFONO (diagnóstico separado) ─────────────────
+  async function testMicrophone(){
+    setVoiceError("");
+    setVoiceStatus("testing");
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      stream.getTracks().forEach(t=>t.stop());
+      setVoiceStatus("idle");
+      boom("✅ Micrófono detectado y con permiso");
+    }catch(err){
+      const msgs={
+        NotAllowedError:"Permiso denegado. Ve a Configuración del sitio y permite el micrófono.",
+        NotFoundError:"No se encontró micrófono. Conecta uno y recarga.",
+        NotReadableError:"Otro programa está usando el micrófono.",
+        OverconstrainedError:"Micrófono no cumple los requisitos.",
+      };
+      const msg=msgs[err.name]||("Error: "+err.name+" — "+err.message);
+      setVoiceError(msg);
+      setVoiceStatus("error");
+      boom("❌ "+msg);
+    }
+  }
+
+  // ── VOZ JARVIS — robusto con diagnóstico detallado ─────────
+  function toggleVoice(){
+    // Si está escuchando, detener
+    if(voiceActive){
+      setVoiceActive(false);
+      setVoiceStatus("idle");
+      window.speechSynthesis&&window.speechSynthesis.cancel();
+      return;
+    }
+
+    // Verificar soporte
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){
+      const msg="Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.";
+      setVoiceError(msg);
+      setVoiceStatus("error");
+      boom("❌ "+msg);
+      return;
+    }
+
+    setVoiceError("");
+    setVoiceStatus("listening");
+    setVoiceActive(true);
+
+    const rec=new SR();
+    rec.lang="es-ES";
+    rec.continuous=false;
+    rec.interimResults=false;
+    rec.maxAlternatives=1;
+
+    rec.onstart=()=>{
+      setVoiceStatus("listening");
+    };
+
+    rec.onspeechstart=()=>{
+      setVoiceStatus("hearing");
+    };
+
+    rec.onresult=(e)=>{
+      const transcript=e.results[0][0].transcript.trim();
+      const confidence=Math.round(e.results[0][0].confidence*100);
+      setVoiceStatus("processing");
+      setVoiceActive(false);
+      if(transcript){
+        sendMessageToSofia(transcript);
+      }
+    };
+
+    rec.onerror=(e)=>{
+      setVoiceActive(false);
+      const errorMessages={
+        "no-speech":        "No detecté audio. Habla más cerca del micrófono y vuelve a intentar.",
+        "audio-capture":    "No se pudo acceder al micrófono. Verifica que esté conectado.",
+        "not-allowed":      "Permiso denegado. Haz clic en el candado del navegador y permite el micrófono.",
+        "network":          "Error de red en el servicio de reconocimiento. Verifica tu conexión.",
+        "service-not-allowed":"El servicio de voz no está disponible en este navegador o contexto.",
+        "aborted":          "Reconocimiento cancelado.",
+        "bad-grammar":      "Error de configuración de gramática.",
+        "language-not-supported":"El idioma no está soportado.",
+      };
+      const msg=errorMessages[e.error]||("Error de voz: "+e.error);
+      setVoiceError(msg);
+      setVoiceStatus("error");
+      // Mostrar en el chat como mensaje del sistema
+      setChat(p=>[...p,{role:"assistant",content:"🎤 "+msg+" (código: "+e.error+")"}]);
+    };
+
+    rec.onend=()=>{
+      setVoiceActive(false);
+      if(voiceStatus==="listening"||voiceStatus==="hearing"){
+        setVoiceStatus("idle");
+      }
+    };
+
+    try{
+      rec.start();
+    }catch(err){
+      setVoiceActive(false);
+      setVoiceStatus("error");
+      const msg="No se pudo iniciar: "+err.message;
+      setVoiceError(msg);
+      boom("❌ "+msg);
+    }
+  }
+  async function sendChat(){
+    if(!chatIn.trim()||chatLoad)return;
+    const text=chatIn;
+    setChatIn("");
+    await sendMessageToSofia(text);
   }
   if(!clinic)return <Login onLogin={setClinic}/>;
   const pendingCount=pendingBookings.filter(b=>b.status==="pending").length;
@@ -698,13 +793,35 @@ function App(){
               </div>)}
               {chatLoad&&<div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:"rgba(255,255,255,.3)",animation:`bounce 1s ${i*.2}s infinite`}}/>)}</div>}
             </div>
-            <div style={{padding:"11px 13px",borderTop:"1px solid rgba(255,255,255,.06)",display:"flex",gap:8}}>
-              <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder="Escribe en cualquier idioma..."
-                style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit"}}/>
-              <button onClick={toggleVoice} title={voiceActive?"Detener":"Hablar con Sofía"} style={{padding:"9px 13px",background:voiceActive?"linear-gradient(135deg,#ef4444,#dc2626)":"rgba(255,255,255,.07)",border:"1px solid "+(voiceActive?"rgba(239,68,68,.5)":"rgba(255,255,255,.12)"),borderRadius:8,color:"#fff",fontSize:16,cursor:"pointer",flexShrink:0,animation:voiceActive?"pulse 1s infinite":"none",transition:"all .2s"}}>
-                {voiceActive?"⏹":"🎤"}
-              </button>
-              <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.5:1}}>➤</button>
+            <div style={{padding:"8px 13px",borderTop:"1px solid rgba(255,255,255,.06)"}}>
+              {/* Status bar */}
+              {(voiceStatus!=="idle"||voiceError)&&<div style={{marginBottom:6,padding:"5px 10px",borderRadius:6,fontSize:11,display:"flex",alignItems:"center",gap:6,
+                background:voiceStatus==="error"?"rgba(239,68,68,.12)":voiceStatus==="listening"||voiceStatus==="hearing"?"rgba(34,197,94,.1)":"rgba(59,130,246,.1)",
+                color:voiceStatus==="error"?"#f87171":voiceStatus==="listening"||voiceStatus==="hearing"?"#22c55e":"#60a5fa"}}>
+                <span style={{animation:voiceStatus==="listening"||voiceStatus==="hearing"?"pulse 1s infinite":"none"}}>
+                  {voiceStatus==="listening"?"🎙️ Escuchando...":voiceStatus==="hearing"?"🔊 Detectando voz...":voiceStatus==="processing"?"⚙️ Procesando...":voiceStatus==="testing"?"🔍 Verificando micrófono...":"⚠️ "+voiceError}
+                </span>
+                {voiceStatus==="error"&&<button onClick={testMicrophone} style={{marginLeft:"auto",padding:"2px 8px",background:"rgba(239,68,68,.2)",border:"1px solid rgba(239,68,68,.3)",borderRadius:4,color:"#f87171",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>Probar micrófono</button>}
+              </div>}
+              {/* Input row */}
+              <div style={{display:"flex",gap:8}}>
+                <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()} placeholder={voiceActive?"🎤 Escuchando...":"Escribe o usa el micrófono..."}
+                  style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid "+(voiceActive?"rgba(34,197,94,.4)":"rgba(255,255,255,.1)"),borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit",transition:"border-color .2s"}}/>
+                <button onClick={toggleVoice}
+                  title={voiceActive?"Detener":"Hablar con Sofía (Jarvis mode)"}
+                  style={{width:38,height:38,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                    background:voiceActive?"linear-gradient(135deg,#ef4444,#dc2626)":"rgba(255,255,255,.07)",
+                    border:"1px solid "+(voiceActive?"rgba(239,68,68,.6)":"rgba(255,255,255,.15)"),
+                    borderRadius:8,color:"#fff",fontSize:17,cursor:"pointer",
+                    boxShadow:voiceActive?"0 0 12px rgba(239,68,68,.4)":"none",
+                    animation:voiceActive?"pulse 1.5s infinite":"none",transition:"all .2s"}}>
+                  {voiceActive?"⏹":"🎤"}
+                </button>
+                <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()}
+                  style={{padding:"9px 14px",background:"linear-gradient(135deg,#0066ff,#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.5:1,flexShrink:0}}>
+                  ➤
+                </button>
+              </div>
             </div>
           </Card>
         </div>
