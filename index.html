@@ -127,9 +127,10 @@ function App(){
   const[treatForm,setTreatForm]=useState({name:"",price:"",price_mode:"exact",duration:30,active:true});
   const[savingTreat,setSavingTreat]=useState(false);
   const[sofiaMode,setSofiaMode]=useState("reception");
-  // ── VOZ JARVIS ──
+  // ── VOZ JARVIS (MediaRecorder + Groq Whisper) ──
   const[mic,setMic]=useState(false);
   const[micStatus,setMicStatus]=useState("");
+  const[micSupported]=useState(!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia));
   const chatRef=useRef(null);
 
   useEffect(()=>{if(clinic)loadAll();},[clinic]);
@@ -226,32 +227,117 @@ function App(){
   }
   function sendChat(){if(!chatIn.trim()||chatLoad)return;askSofia(chatIn);}
 
-  // ── MICRÓFONO JARVIS ─────────────────────────────────────────
-  function toggleMic(){
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!SR){boom("❌ Usa Chrome o Edge para voz");return;}
-    if(mic){setMic(false);setMicStatus("");return;}
-    const rec=new SR();
-    rec.lang="es-ES";rec.continuous=false;rec.interimResults=false;
-    setMic(true);setMicStatus("🎙️ Escuchando...");
-    rec.onstart=()=>setMicStatus("🎙️ Escuchando...");
-    rec.onspeechstart=()=>setMicStatus("🔊 Detectando voz...");
-    rec.onresult=(e)=>{
-      const t=e.results[0][0].transcript.trim();
-      setMic(false);setMicStatus("⚙️ Procesando: "+t.substring(0,40)+"...");
-      if(t)askSofia(t);
-      setTimeout(()=>setMicStatus(""),3000);
-    };
-    rec.onerror=(e)=>{
+  // ── MICRÓFONO JARVIS (MediaRecorder + Groq Whisper) ─────────
+  // No depende de servicios del navegador — audio va al backend
+  async function toggleMic(){
+    if(!micSupported){
+      boom("❌ Tu navegador no soporta grabación. Usa Chrome o Edge.");
+      return;
+    }
+    if(mic){
+      // detener grabación si ya estaba activa
       setMic(false);
-      const msgs={"no-speech":"Sin audio detectado","not-allowed":"Permiso denegado — haz clic en el candado 🔒","audio-capture":"Micrófono no encontrado","network":"Error de red en servicio de voz","service-not-allowed":"Voz no disponible en este contexto"};
-      const msg=msgs[e.error]||("Error: "+e.error);
+      return;
+    }
+
+    setMicStatus("🎙️ Solicitando micrófono...");
+    let stream;
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+    }catch(err){
+      const msgs={
+        NotAllowedError:"Permiso denegado. Haz clic en el 🔒 de la barra de dirección → Permitir micrófono.",
+        NotFoundError:"No se encontró micrófono. Conecta uno y recarga la página.",
+        NotReadableError:"El micrófono está en uso por otra aplicación.",
+      };
+      const msg=msgs[err.name]||("Error de micrófono: "+err.name);
       setMicStatus("❌ "+msg);
-      setChat(p=>[...p,{role:"assistant",content:"🎤 "+msg}]);
-      setTimeout(()=>setMicStatus(""),5000);
+      boom("❌ "+msg);
+      setTimeout(()=>setMicStatus(""),6000);
+      return;
+    }
+
+    // Elegir formato compatible
+    const mimeType=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":
+                   MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":
+                   MediaRecorder.isTypeSupported("audio/ogg")?"audio/ogg":"audio/webm";
+
+    const recorder=new MediaRecorder(stream,{mimeType});
+    const chunks=[];
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size>0)chunks.push(e.data);};
+
+    recorder.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      setMicStatus("⚙️ Transcribiendo...");
+      setMic(false);
+
+      const blob=new Blob(chunks,{type:mimeType});
+      if(blob.size<1000){
+        setMicStatus("⚠️ Audio muy corto. Habla por al menos 1 segundo.");
+        setTimeout(()=>setMicStatus(""),4000);
+        return;
+      }
+
+      try{
+        const params=new URLSearchParams({clinic_id:clinic.id,mode:sofiaMode});
+        const r=await fetch("/api/sofia-voice?"+params,{
+          method:"POST",
+          headers:{"Content-Type":mimeType},
+          body:blob,
+        });
+
+        if(!r.ok){
+          const errData=await r.json().catch(()=>({}));
+          const msg=errData.error||("Error del servidor: "+r.status);
+          setMicStatus("❌ "+msg);
+          setChat(p=>[...p,{role:"assistant",content:"🎤 "+msg+(errData.fix?" — "+errData.fix:"")}]);
+          setTimeout(()=>setMicStatus(""),7000);
+          return;
+        }
+
+        const data=await r.json();
+
+        if(!data.transcript){
+          setMicStatus("⚠️ No detecté voz. Intenta de nuevo.");
+          setTimeout(()=>setMicStatus(""),4000);
+          return;
+        }
+
+        setMicStatus("✅ "+data.transcript.substring(0,50)+(data.transcript.length>50?"...":""));
+
+        // Mostrar transcript en chat y respuesta de Sofia
+        const userMsg={role:"user",content:data.transcript};
+        setChat(p=>[...p,userMsg,{role:"assistant",content:data.reply}]);
+
+        // TTS — Sofia responde en voz
+        if(data.reply&&window.speechSynthesis){
+          window.speechSynthesis.cancel();
+          const utt=new window.SpeechSynthesisUtterance(data.reply.replace(/[*_#]/g,"").substring(0,300));
+          utt.lang="es-ES";utt.rate=0.93;utt.pitch=1.08;
+          const voices=window.speechSynthesis.getVoices();
+          const esVoice=voices.find(v=>v.lang.startsWith("es")&&v.name.toLowerCase().includes("female"))||voices.find(v=>v.lang.startsWith("es"));
+          if(esVoice)utt.voice=esVoice;
+          window.speechSynthesis.speak(utt);
+        }
+
+        setTimeout(()=>setMicStatus(""),4000);
+      }catch(fetchErr){
+        setMicStatus("❌ Error de red: "+fetchErr.message);
+        setTimeout(()=>setMicStatus(""),5000);
+      }
     };
-    rec.onend=()=>{setMic(false);};
-    try{rec.start();}catch(err){setMic(false);setMicStatus("❌ "+err.message);}
+
+    setMic(true);
+    setMicStatus("🎙️ Grabando — habla ahora...");
+    recorder.start();
+
+    // Auto-detener después de 8 segundos
+    setTimeout(()=>{
+      if(recorder.state==="recording"){
+        recorder.stop();
+        setMicStatus("⚙️ Procesando...");
+      }
+    },8000);
   }
 
   if(!clinic)return <Login onLogin={setClinic}/>;
