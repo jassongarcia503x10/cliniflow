@@ -297,24 +297,34 @@ function TabPacientes(){
   async function savePat(){
     if(!patForm.name.trim())return;setSaving(true);
     try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
       const allergies=patForm.allergies?patForm.allergies.split(",").map(a=>a.trim()).filter(Boolean):[];
-      const p={name:patForm.name,phone:patForm.phone||null,email:patForm.email||null,allergies,notes:patForm.notes||null,active:true};
-      if(editPat){await dbPatch("patients",p,{id:editPat});boom("Paciente actualizado");}
-      else{await dbPost("patients",Object.assign({},p,{clinic_id:clinic.id,source:"manual"}));boom("Paciente creado");}
+      const body={name:patForm.name.trim(),phone:patForm.phone||null,email:patForm.email||null,allergies,notes:patForm.notes||null};
+      if(editPat){
+        body.id=editPat;body.active=true;
+        const r=await fetch("/api/patients",{method:"PATCH",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify(body)});
+        const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+        boom("Paciente actualizado");
+      }else{
+        const r=await fetch("/api/patients",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify(body)});
+        const d=await r.json();if(!r.ok)throw new Error(d.error||r.status);
+        boom("Paciente creado");
+      }
       resetForm();await loadAll();
     }catch(e){boom("Error: "+e.message);}setSaving(false);
   }
   async function addNote(){
     if(!newNote.trim()||!selPatient)return;setSavingNote(true);
     try{
-      const row=await dbPost("patient_notes",{clinic_id:clinic.id,patient_id:selPatient.id,content:newNote,note_type:noteType,created_by:"panel"});
+      const{error:ne}=await sb.from("patient_notes").insert([{clinic_id:clinic.id,patient_id:selPatient.id,content:newNote,note_type:noteType,created_by:"panel"}]);
+      if(ne)throw new Error(ne.message);
       if(noteType==="allergy"||noteType==="alert"){
-        await dbPost("sofia_memories",{clinic_id:clinic.id,patient_id:selPatient.id,patient_phone:selPatient.phone||null,category:noteType,content:selPatient.name+": "+newNote,source:"doctor",importance:noteType==="allergy"?9:7});
+        await sb.from("sofia_memories").insert([{clinic_id:clinic.id,patient_id:selPatient.id,patient_phone:selPatient.phone||null,category:noteType,content:selPatient.name+": "+newNote,source:"doctor",importance:noteType==="allergy"?9:7}]);
       }
       setNewNote("");boom("Nota guardada");
-      // refresh notes
-      const notes=await dbGet("patient_notes",{eq:{patient_id:selPatient.id},order:"created_at.desc",limit:20});
-      setSelPatient(Object.assign({},selPatient,{_notes:Array.isArray(notes)?notes:[]}));
+      const{data:notes}=await sb.from("patient_notes").select("*").eq("patient_id",selPatient.id).order("created_at",{ascending:false}).limit(20);
+      setPatNotes(Array.isArray(notes)?notes:[]);
       await loadAll();
     }catch(e){boom("Error: "+e.message);}setSavingNote(false);
   }
@@ -760,32 +770,32 @@ function App(){
   async function loadAll(){
     setLoading(true);
     try{
-      const[l,a,p,d,t,m,pts]=await Promise.all([
+      const[l,a,p,d,t,m,ptsRes]=await Promise.all([
         dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("appointments",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("pending_bookings",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("doctors",{eq:{clinic_id:clinic.id},order:"created_at.asc"}),
         dbGet("treatments",{eq:{clinic_id:clinic.id},order:"name.asc"}),
         dbGet("messages",{eq:{clinic_id:clinic.id},order:"created_at.asc",limit:50}),
-        dbGet("patients",{eq:{clinic_id:clinic.id},order:"name.asc",limit:100}),
+        (async()=>{const sess=await sb.auth.getSession();const jwt=(sess.data.session||{}).access_token||"";return fetch("/api/patients",{headers:{Authorization:"Bearer "+jwt}}).then(r=>r.json());})(),
       ]);
       setLeads(Array.isArray(l)?l:[]);setAppts(Array.isArray(a)?a:[]);
       setPendingBookings(Array.isArray(p)?p:[]);setDoctors(Array.isArray(d)?d:[]);
       setTreats(Array.isArray(t)?t:[]);setMsgs(Array.isArray(m)?m:[]);
-      setPatients(Array.isArray(pts)?pts:[]);
+      setPatients(Array.isArray(ptsRes)?ptsRes:(Array.isArray(ptsRes.data)?ptsRes.data:[]));
     }catch(e){boom("Error al cargar: "+e.message);}setLoading(false);
   }
 
   async function selectPatient(p){
     setSelPatient(p);
     try{
-      const[notes,records]=await Promise.all([
-        dbGet("patient_notes",{eq:{patient_id:p.id},order:"created_at.desc",limit:20}),
-        dbGet("clinical_records",{eq:{patient_id:p.id},order:"created_at.desc",limit:10}),
+      const[notesRes,recsRes]=await Promise.all([
+        sb.from("patient_notes").select("*").eq("patient_id",p.id).order("created_at",{ascending:false}).limit(20),
+        sb.from("clinical_records").select("*").eq("patient_id",p.id).order("created_at",{ascending:false}).limit(10),
       ]);
-      setPatNotes(Array.isArray(notes)?notes:[]);
-      setPatRecords(Array.isArray(records)?records:[]);
-    }catch(e){boom("Error: "+e.message);}
+      setPatNotes(Array.isArray(notesRes.data)?notesRes.data:[]);
+      setPatRecords(Array.isArray(recsRes.data)?recsRes.data:[]);
+    }catch(e){boom("Error al cargar historial: "+e.message);}
   }
 
   async function confirmBooking(bookingId,action){
