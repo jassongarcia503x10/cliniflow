@@ -1,0 +1,841 @@
+// ============================================================
+// CLINIFLOW app.js — Sprint 3
+// Architecture: React Context + extracted tab components
+// No build step required — loaded by Babel Standalone
+// ============================================================
+
+// ── SECTION 1: CONFIG & SUPABASE ─────────────────────────────
+const SB_URL  = "https://auklwgsdybtusxncfglo.supabase.co";
+const SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
+const sb = window.supabase.createClient(SB_URL, SB_ANON);
+const HDR = { apikey: SB_ANON, Authorization: "Bearer " + SB_ANON, "Content-Type": "application/json" };
+
+// lib/supabase.js — shared DB helpers (no created_at in inserts — DB sets DEFAULT)
+async function dbGet(table, opts) {
+  opts = opts || {};
+  let url = SB_URL + "/rest/v1/" + table + "?select=*";
+  if (opts.eq)    Object.entries(opts.eq).forEach(([k,v]) => { url += "&" + k + "=eq." + encodeURIComponent(v); });
+  if (opts.neq)   Object.entries(opts.neq).forEach(([k,v]) => { url += "&" + k + "=neq." + encodeURIComponent(v); });
+  if (opts.order) url += "&order=" + opts.order;
+  if (opts.limit) url += "&limit=" + opts.limit;
+  const r = await fetch(url, { headers: HDR });
+  if (!r.ok) throw new Error(r.status + ": " + await r.text());
+  return r.json();
+}
+async function dbPost(table, data) {
+  // Never send created_at — let the DB DEFAULT handle it
+  const clean = Object.assign({}, data);
+  delete clean.created_at;
+  delete clean.updated_at;
+  const r = await fetch(SB_URL + "/rest/v1/" + table, {
+    method: "POST",
+    headers: Object.assign({}, HDR, { Prefer: "return=representation" }),
+    body: JSON.stringify(clean),
+  });
+  if (!r.ok) throw new Error(r.status + ": " + await r.text());
+  return r.json();
+}
+async function dbPatch(table, data, eq) {
+  let url = SB_URL + "/rest/v1/" + table + "?";
+  Object.entries(eq).forEach(([k,v]) => { url += k + "=eq." + encodeURIComponent(v) + "&"; });
+  const r = await fetch(url, {
+    method: "PATCH",
+    headers: Object.assign({}, HDR, { Prefer: "return=representation" }),
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error(r.status + ": " + await r.text());
+  return r.json();
+}
+
+// ── SECTION 2: DENTAL CATALOG ─────────────────────────────────
+const CATALOG = [
+  {n:"Limpieza dental",        e:"Dental Cleaning",      h:"Ciscenje zuba",        d:45,  m:"exact"},
+  {n:"Blanqueamiento dental",  e:"Teeth Whitening",      h:"Izbjeljivanje zuba",   d:60,  m:"from"},
+  {n:"Empaste / Obturacion",   e:"Dental Filling",       h:"Plomba",               d:45,  m:"exact"},
+  {n:"Endodoncia (conductos)", e:"Root Canal",           h:"Lijecenje kanala",     d:90,  m:"from"},
+  {n:"Extraccion simple",      e:"Tooth Extraction",     h:"Vadenje zuba",         d:30,  m:"exact"},
+  {n:"Extraccion muela juicio",e:"Wisdom Tooth Removal", h:"Vadenje umnjaka",      d:60,  m:"from"},
+  {n:"Implante dental",        e:"Dental Implant",       h:"Dentalni implantat",   d:90,  m:"from"},
+  {n:"Corona porcelana",       e:"Porcelain Crown",      h:"Keramicka krunica",    d:90,  m:"from"},
+  {n:"Corona de zirconio",     e:"Zirconia Crown",       h:"Cirkonska krunica",    d:90,  m:"from"},
+  {n:"Carilla dental",         e:"Dental Veneer",        h:"Ljuskica",             d:120, m:"from"},
+  {n:"Ortodoncia brackets",    e:"Braces",               h:"Fiksni aparat",        d:60,  m:"from"},
+  {n:"Invisalign / Alineadores",e:"Invisalign",          h:"Nevidljiva ortodoncija",d:60, m:"from"},
+  {n:"Puente dental fijo",     e:"Dental Bridge",        h:"Fiksni mostic",        d:90,  m:"from"},
+  {n:"Dentadura removible",    e:"Removable Denture",    h:"Pomicna proteza",      d:60,  m:"from"},
+  {n:"Tratamiento de encias",  e:"Gum Treatment",        h:"Lijecenje desni",      d:60,  m:"from"},
+  {n:"Radiografia panoramica", e:"Panoramic X-Ray",      h:"Panoramski RTG",       d:15,  m:"exact"},
+  {n:"Consulta / Revision",    e:"Dental Checkup",       h:"Dentalni pregled",     d:30,  m:"exact"},
+  {n:"Sellado dental",         e:"Dental Sealant",       h:"Pecatiranje zuba",     d:30,  m:"exact"},
+  {n:"Fluoruro topico",        e:"Fluoride Treatment",   h:"Fluoridacija",         d:20,  m:"exact"},
+  {n:"Odontopediatria",        e:"Pediatric Dentistry",  h:"Djecja stomatologija", d:30,  m:"exact"},
+  {n:"Urgencia dental",        e:"Dental Emergency",     h:"Hitna pomoc",          d:30,  m:"exact"},
+  {n:"Ferula de bruxismo",     e:"Night Guard",          h:"Stinik za zube",       d:30,  m:"from"},
+  {n:"Injerto oseo",           e:"Bone Graft",           h:"Kostani presadak",     d:90,  m:"from"},
+  {n:"All-on-4 implantes",     e:"All-on-4 Implants",    h:"Sve na cetiri",        d:180, m:"from"},
+  {n:"Bonding dental",         e:"Dental Bonding",       h:"Composit bonding",     d:60,  m:"from"},
+  {n:"Cirugia de encias",      e:"Gum Surgery",          h:"Kirurgija desni",      d:90,  m:"from"},
+  {n:"Tomografia CBCT",        e:"CBCT Scan",            h:"CBCT snimak",          d:20,  m:"exact"},
+  {n:"Retenedor ortodontico",  e:"Retainer",             h:"Ortodontski retainer", d:30,  m:"exact"},
+  {n:"Elevacion de seno",      e:"Sinus Lift",           h:"Podizanje sinusa",     d:90,  m:"from"},
+  {n:"Anestesia / Sedacion",   e:"Sedation",             h:"Sedacija",             d:30,  m:"from"},
+];
+function catalogMatch(q) {
+  if (!q || q.length < 2) return [];
+  const l = q.toLowerCase();
+  return CATALOG.filter(c =>
+    c.n.toLowerCase().includes(l) ||
+    c.e.toLowerCase().includes(l) ||
+    c.h.toLowerCase().includes(l)
+  ).slice(0, 6);
+}
+
+// ── SECTION 3: UI ATOMS ───────────────────────────────────────
+const {useState, useEffect, useRef, useContext, createContext} = React;
+const CC = {green:["rgba(34,197,94,.12)","#22c55e"],blue:["rgba(59,130,246,.12)","#60a5fa"],yellow:["rgba(234,179,8,.12)","#eab308"],red:["rgba(239,68,68,.12)","#ef4444"],purple:["rgba(168,85,247,.12)","#c084fc"],orange:["rgba(249,115,22,.12)","#fb923c"]};
+function Badge({c="blue",children}){const[bg,tx]=CC[c]||CC.blue;return<span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:bg,color:tx}}>{children}</span>;}
+function Spinner(){return<div style={{display:"flex",justifyContent:"center",padding:48}}><div className="spin" style={{width:32,height:32,border:"3px solid rgba(255,255,255,.08)",borderTop:"3px solid #0ea5e9",borderRadius:"50%"}}/></div>;}
+function Toast({msg}){if(!msg)return null;return<div style={{position:"fixed",top:20,right:20,zIndex:9999,padding:"12px 20px",background:"rgba(34,197,94,.15)",border:"1px solid rgba(34,197,94,.3)",borderRadius:12,fontSize:13,color:"#22c55e",boxShadow:"0 10px 40px rgba(0,0,0,.5)",animation:"fadeIn .3s ease"}}>{msg}</div>;}
+function Inp({label,value,onChange,type="text",placeholder="",readOnly=false}){return<div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{label}</label>}<input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} readOnly={readOnly} style={{padding:"11px 14px",background:readOnly?"rgba(255,255,255,.03)":"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:readOnly?"rgba(255,255,255,.4)":"#fff",fontSize:14,outline:"none",fontFamily:"inherit",width:"100%"}}/></div>;}
+function Sel({label,value,onChange,opts}){return<div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{label}</label>}<select value={value} onChange={e=>onChange(e.target.value)} style={{padding:"11px 14px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:14,outline:"none",fontFamily:"inherit"}}>{opts.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>;}
+function Btn({children,onClick,disabled,variant="primary",full,style={}}){const vs={primary:{background:"linear-gradient(135deg,#0066ff,#00d4ff)",color:"#fff",border:"none"},ghost:{background:"transparent",color:"#60a5fa",border:"1px solid rgba(59,130,246,.3)"},danger:{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)"}};return<button onClick={onClick} disabled={disabled} style={{padding:"10px 20px",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.55:1,transition:"all .2s",width:full?"100%":"auto",...vs[variant],...style}}>{children}</button>;}
+function Card({children,style={}}){return<div style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:16,...style}}>{children}</div>;}
+function StatCard({icon,label,val,color,sub}){return<Card style={{padding:"20px 22px",position:"relative",overflow:"hidden"}}><div style={{position:"absolute",top:0,left:0,right:0,height:2,background:"linear-gradient(90deg,"+color+",transparent)"}}/><div style={{fontSize:22,marginBottom:8}}>{icon}</div><div style={{fontSize:32,fontWeight:800,color,fontFamily:"'Syne',sans-serif"}}>{val}</div><div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:3}}>{label}</div>{sub&&<div style={{fontSize:11,color:"rgba(255,255,255,.25)",marginTop:2}}>{sub}</div>}</Card>;}
+function SectionHeader({title,action}){return<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>{title}</h1>{action}</div>;}
+function TreatmentInput({value,onChange,onSelect}){
+  const[show,setShow]=useState(false);
+  const suggestions=catalogMatch(value);
+  return<div style={{position:"relative"}}>
+    <Inp label="Nombre del tratamiento *" value={value} onChange={v=>{onChange(v);setShow(true);}} placeholder="Escribe o busca en catalogo dental..."/>
+    {show&&suggestions.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:50,background:"#1e293b",border:"1px solid rgba(255,255,255,.15)",borderRadius:10,marginTop:4,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,.5)"}}>
+      {suggestions.map((s,i)=><div key={i} onMouseDown={()=>{onSelect(s);setShow(false);}} style={{padding:"10px 14px",cursor:"pointer",borderBottom:i<suggestions.length-1?"1px solid rgba(255,255,255,.06)":"none"}}
+        onMouseEnter={e=>e.currentTarget.style.background="rgba(59,130,246,.15)"}
+        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+        <div style={{fontSize:13,fontWeight:600}}>{s.n}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>{s.e} · {s.h} · {s.d} min</div>
+      </div>)}
+    </div>}
+  </div>;
+}
+
+// ── SECTION 4: APP CONTEXT ────────────────────────────────────
+const AppCtx = createContext(null);
+function useApp() { return useContext(AppCtx); }
+
+// ── SECTION 5: LOGIN ──────────────────────────────────────────
+function Login({onLogin}){
+  const[email,setEmail]=useState("");
+  const[pass,setPass]=useState("");
+  const[err,setErr]=useState("");
+  const[load,setLoad]=useState(false);
+  const[mode,setMode]=useState("login");
+  const[done,setDone]=useState("");
+  async function doLogin(){
+    if(!email||!pass)return setErr("Completa email y contrasena");
+    setLoad(true);setErr("");
+    const res=await sb.auth.signInWithPassword({email,password:pass});
+    if(res.error){setErr("Email o contrasena incorrectos");setLoad(false);return;}
+    const user=res.data.user;const sess=res.data.session;
+    try{
+      const cu=await sb.from("clinic_users").select("clinic_id").eq("user_id",user.id).limit(1);
+      if(cu.data&&cu.data.length>0){
+        const cl=await sb.from("clinics").select("*").eq("id",cu.data[0].clinic_id).limit(1);
+        if(cl.data&&cl.data.length>0){onLogin(cl.data[0],sess);setLoad(false);return;}
+      }
+    }catch(e){}
+    try{
+      const r=await fetch("/api/create-clinic-onboarding",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+sess.access_token}});
+      const data=await r.json();
+      if(r.ok&&data.clinic){onLogin(data.clinic,sess);setLoad(false);return;}
+    }catch(e){}
+    setErr("No se pudo configurar tu clinica.");await sb.auth.signOut();setLoad(false);
+  }
+  async function doRegister(){
+    if(!email||!pass)return setErr("Completa email y contrasena");
+    if(pass.length<8)return setErr("Minimo 8 caracteres");
+    setLoad(true);setErr("");
+    const res=await sb.auth.signUp({email,password:pass,options:{emailRedirectTo:window.location.origin}});
+    if(res.error){setErr(res.error.message);setLoad(false);return;}
+    setDone("Revisa tu email y confirma tu cuenta. Luego inicia sesion.");setLoad(false);
+  }
+  async function doReset(){
+    if(!email)return setErr("Ingresa tu email");
+    setLoad(true);setErr("");
+    const res=await sb.auth.resetPasswordForEmail(email,{redirectTo:window.location.origin});
+    if(res.error){setErr(res.error.message);}else{setDone("Link enviado a "+email);}setLoad(false);
+  }
+  return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"radial-gradient(ellipse at 30% 50%,rgba(14,165,233,.08),transparent 60%),#04080f"}}>
+    <div className="animate-in" style={{width:"100%",maxWidth:420}}>
+      <div style={{textAlign:"center",marginBottom:36}}>
+        <div style={{fontFamily:"'Syne',sans-serif",fontSize:38,fontWeight:800,background:"linear-gradient(135deg,#00d4ff,#0066ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,.35)",marginTop:6}}>Sistema dental IA multiclínica</div>
+      </div>
+      <Card style={{padding:32}}>
+        {done?<div style={{textAlign:"center",padding:16}}><div style={{fontSize:32,marginBottom:12}}>📧</div><div style={{fontSize:14,lineHeight:1.6,marginBottom:16}}>{done}</div><Btn onClick={()=>{setDone("");setMode("login");}} variant="ghost">Volver al login</Btn></div>
+        :<div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,marginBottom:4}}>{mode==="login"?"Iniciar sesion":mode==="register"?"Crear cuenta":"Recuperar acceso"}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.35)",marginBottom:24}}>{mode==="register"?"Tu clinica nueva, lista en segundos":mode==="login"?"Accede a tu panel":"Enviamos un link de recuperacion"}</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:18}}>
+            <Inp label="Email" value={email} onChange={setEmail} placeholder="tu@clinica.com"/>
+            {mode!=="reset"&&<Inp label="Contrasena" type="password" value={pass} onChange={setPass} placeholder={mode==="register"?"Minimo 8 caracteres":""}/>}
+          </div>
+          {err&&<div style={{padding:"10px 14px",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",borderRadius:8,fontSize:13,color:"#fca5a5",marginBottom:14}}>{err}</div>}
+          {mode==="login"&&<Btn onClick={doLogin} disabled={load} full style={{padding:13,fontSize:15}}>{load?"Verificando...":"Entrar"}</Btn>}
+          {mode==="register"&&<Btn onClick={doRegister} disabled={load} full style={{padding:13,fontSize:15}}>{load?"Creando cuenta...":"Crear cuenta"}</Btn>}
+          {mode==="reset"&&<Btn onClick={doReset} disabled={load||!email} full style={{padding:13,fontSize:15}}>{load?"Enviando...":"Enviar link"}</Btn>}
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:16,fontSize:12}}>
+            {mode!=="login"?<button onClick={()=>{setMode("login");setErr("");}} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Volver al login</button>:<span/>}
+            {mode==="login"&&<button onClick={()=>{setMode("reset");setErr("");}} style={{background:"none",border:"none",color:"rgba(255,255,255,.35)",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Olvide mi contrasena</button>}
+            {mode==="login"&&<button onClick={()=>{setMode("register");setErr("");}} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Crear cuenta</button>}
+          </div>
+        </div>}
+      </Card>
+    </div>
+  </div>;
+}
+
+// ── SECTION 6: TAB COMPONENTS ─────────────────────────────────
+
+function TabDashboard(){
+  const{clinic,leads,appts,doctors,treats,patients,pendingBookings,setTab,selectPatient}=useApp();
+  const curr=clinic.currency||"EUR";
+  const bc=clinic.brand_color||"#0066ff";
+  const now=new Date();
+  const todayStr=now.toISOString().slice(0,10);
+  const mStart=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-01";
+  const confAppts=appts.filter(a=>a.status==="confirmed");
+  const todayA=confAppts.filter(a=>(a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
+  const monthA=confAppts.filter(a=>(a.appointment_date||a.created_at||"")>=mStart);
+  const rev=monthA.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
+  const activePats=patients.filter(p=>p.active!==false);
+  const pending=pendingBookings.filter(b=>b.status==="pending").length;
+  return<div className="animate-in">
+    <div style={{marginBottom:24}}>
+      <div style={{fontSize:12,color:"rgba(255,255,255,.3)",marginBottom:3}}>{new Date().toLocaleDateString("es",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
+      <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,margin:0,letterSpacing:-1}}>{clinic.name} 🦷</h1>
+      {(!clinic.city||!clinic.phone)&&<div style={{marginTop:10,padding:"10px 14px",background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.2)",borderRadius:8,fontSize:13,color:"#fbbf24"}}>
+        Completa la configuracion de tu clinica. <button onClick={()=>setTab("config")} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontFamily:"inherit",fontSize:13,textDecoration:"underline"}}>Ir ahora</button>
+      </div>}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+      <StatCard icon="💰" label="Ingresos este mes"    val={curr+" "+rev.toLocaleString()} color="#22c55e" sub={curr+" "+todayA.reduce((s,a)=>s+(parseFloat(a.price)||0),0)+" hoy"}/>
+      <StatCard icon="📅" label="Citas confirmadas"    val={confAppts.length}              color="#3b82f6" sub={todayA.length+" hoy"}/>
+      <StatCard icon="👤" label="Pacientes activos"    val={activePats.length}             color="#a855f7" sub={treats.filter(t=>t.active!==false).length+" tratamientos"}/>
+      <StatCard icon="📋" label="Solicitudes"          val={pending}                       color="#f59e0b" sub="pendientes de confirmar"/>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+      <Card>
+        <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontWeight:700,fontSize:14}}>Pacientes recientes</div>
+        {activePats.slice(0,5).map((p,i)=><div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none",cursor:"pointer"}} onClick={()=>{setTab("pacientes");selectPatient(p);}}>
+          <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,"+bc+")",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:12,flexShrink:0}}>{(p.name||"?").charAt(0).toUpperCase()}</div>
+          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"—"}</div></div>
+          {p.allergies&&p.allergies.length>0&&<Badge c="red">Alergia</Badge>}
+        </div>)}
+        {activePats.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin pacientes aun</div>}
+      </Card>
+      <Card>
+        <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontWeight:700,fontSize:14}}>Doctores ({doctors.filter(d=>d.active!==false).length} activos)</div>
+        {doctors.filter(d=>d.active!==false).slice(0,5).map((d,i)=><div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none"}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:d.color||"#3b82f6",flexShrink:0}}/>
+          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{d.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{d.specialty||"—"}</div></div>
+          <span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>{(d.daily_capacity||d.slots_per_day||8)*5}/sem</span>
+        </div>)}
+        {doctors.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin doctores</div>}
+      </Card>
+    </div>
+  </div>;
+}
+
+function TabPacientes(){
+  const{clinic,patients,loadAll,boom,selPatient,setSelPatient,patNotes,patRecords,selectPatient}=useApp();
+  const bc=clinic.brand_color||"#0066ff";
+  const curr=clinic.currency||"EUR";
+  const[patSearch,setPatSearch]=useState("");
+  const[patForm,setPatForm]=useState({name:"",phone:"",email:"",allergies:"",notes:""});
+  const[editPat,setEditPat]=useState(null);
+  const[saving,setSaving]=useState(false);
+  const[newNote,setNewNote]=useState("");
+  const[noteType,setNoteType]=useState("general");
+  const[savingNote,setSavingNote]=useState(false);
+  const activePats=patients.filter(p=>p.active!==false);
+  const filtered=patSearch?activePats.filter(p=>p.name.toLowerCase().includes(patSearch.toLowerCase())||((p.phone||"").includes(patSearch))):activePats;
+  const NOTE_C={general:"blue",clinical:"purple",allergy:"red",alert:"orange",followup:"yellow",lab:"green"};
+  function resetForm(){setEditPat(null);setPatForm({name:"",phone:"",email:"",allergies:"",notes:""});}
+  async function savePat(){
+    if(!patForm.name.trim())return;setSaving(true);
+    try{
+      const allergies=patForm.allergies?patForm.allergies.split(",").map(a=>a.trim()).filter(Boolean):[];
+      const p={name:patForm.name,phone:patForm.phone||null,email:patForm.email||null,allergies,notes:patForm.notes||null,active:true};
+      if(editPat){await dbPatch("patients",p,{id:editPat});boom("Paciente actualizado");}
+      else{await dbPost("patients",Object.assign({},p,{clinic_id:clinic.id,source:"manual"}));boom("Paciente creado");}
+      resetForm();await loadAll();
+    }catch(e){boom("Error: "+e.message);}setSaving(false);
+  }
+  async function addNote(){
+    if(!newNote.trim()||!selPatient)return;setSavingNote(true);
+    try{
+      const row=await dbPost("patient_notes",{clinic_id:clinic.id,patient_id:selPatient.id,content:newNote,note_type:noteType,created_by:"panel"});
+      if(noteType==="allergy"||noteType==="alert"){
+        await dbPost("sofia_memories",{clinic_id:clinic.id,patient_id:selPatient.id,patient_phone:selPatient.phone||null,category:noteType,content:selPatient.name+": "+newNote,source:"doctor",importance:noteType==="allergy"?9:7});
+      }
+      setNewNote("");boom("Nota guardada");
+      // refresh notes
+      const notes=await dbGet("patient_notes",{eq:{patient_id:selPatient.id},order:"created_at.desc",limit:20});
+      setSelPatient(Object.assign({},selPatient,{_notes:Array.isArray(notes)?notes:[]}));
+      await loadAll();
+    }catch(e){boom("Error: "+e.message);}setSavingNote(false);
+  }
+  return<div className="animate-in">
+    <SectionHeader title="Pacientes" action={<div style={{display:"flex",gap:8}}><Btn onClick={()=>{resetForm();setSelPatient(null);}} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo</Btn><Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>Actualizar</Btn></div>}/>
+    <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:20}}>
+      <div>
+        <input value={patSearch} onChange={e=>setPatSearch(e.target.value)} placeholder="Buscar por nombre o tel..." style={{width:"100%",padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:9,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit",marginBottom:10}}/>
+        <Card style={{maxHeight:"calc(100vh - 240px)",overflowY:"auto"}}>
+          {filtered.length===0&&<div style={{padding:24,textAlign:"center",fontSize:13,color:"rgba(255,255,255,.3)"}}>No hay pacientes</div>}
+          {filtered.map((p,i)=><div key={p.id} onClick={()=>selectPatient(p)} style={{padding:"12px 14px",borderBottom:i<filtered.length-1?"1px solid rgba(255,255,255,.04)":"none",cursor:"pointer",background:selPatient&&selPatient.id===p.id?"rgba(59,130,246,.1)":"transparent"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,"+bc+")",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:11,flexShrink:0}}>{(p.name||"?").charAt(0).toUpperCase()}</div>
+              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"—"}</div></div>
+              {p.allergies&&p.allergies.length>0&&<div style={{width:6,height:6,borderRadius:"50%",background:"#ef4444"}}/>}
+            </div>
+          </div>)}
+        </Card>
+      </div>
+      <div>
+        {!selPatient&&<Card style={{padding:24}}>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:15,fontWeight:700,marginBottom:16}}>{editPat?"Editar paciente":"Nuevo paciente"}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <Inp label="Nombre completo *" value={patForm.name} onChange={v=>setPatForm(p=>Object.assign({},p,{name:v}))} placeholder="Juan Garcia"/>
+            <Inp label="Telefono / WhatsApp" value={patForm.phone} onChange={v=>setPatForm(p=>Object.assign({},p,{phone:v}))} placeholder="+34 600 000 000"/>
+            <Inp label="Email" value={patForm.email} onChange={v=>setPatForm(p=>Object.assign({},p,{email:v}))} placeholder="juan@email.com"/>
+            <Inp label="Alergias (separar con coma)" value={patForm.allergies} onChange={v=>setPatForm(p=>Object.assign({},p,{allergies:v}))} placeholder="Penicilina, Latex"/>
+          </div>
+          <div style={{marginBottom:16}}><Inp label="Notas generales" value={patForm.notes} onChange={v=>setPatForm(p=>Object.assign({},p,{notes:v}))} placeholder="Observaciones..."/></div>
+          <div style={{display:"flex",gap:10}}><Btn onClick={savePat} disabled={saving||!patForm.name} style={{fontSize:13,padding:"9px 18px"}}>{saving?"Guardando...":"Guardar paciente"}</Btn>{editPat&&<Btn variant="ghost" onClick={resetForm} style={{fontSize:13}}>Cancelar</Btn>}</div>
+        </Card>}
+        {selPatient&&<div>
+          <Card style={{padding:20,marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:14}}>
+              <div style={{width:48,height:48,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,"+bc+")",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:18,flexShrink:0}}>{(selPatient.name||"?").charAt(0).toUpperCase()}</div>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Syne',sans-serif",fontSize:18,fontWeight:800}}>{selPatient.name}</div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:2,display:"flex",gap:12,flexWrap:"wrap"}}>
+                  {selPatient.phone&&<span>📱 {selPatient.phone}</span>}
+                  {selPatient.email&&<span>📧 {selPatient.email}</span>}
+                </div>
+                {selPatient.allergies&&selPatient.allergies.length>0&&<div style={{marginTop:8,padding:"6px 10px",background:"rgba(239,68,68,.1)",border:"1px solid rgba(239,68,68,.3)",borderRadius:6}}><span style={{color:"#f87171",fontSize:12,fontWeight:700}}>⚠️ ALERGIAS: {selPatient.allergies.join(", ")}</span></div>}
+                {selPatient.notes&&<div style={{marginTop:6,fontSize:12,color:"rgba(255,255,255,.5)"}}>{selPatient.notes}</div>}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>{setEditPat(selPatient.id);setPatForm({name:selPatient.name||"",phone:selPatient.phone||"",email:selPatient.email||"",allergies:(selPatient.allergies||[]).join(", "),notes:selPatient.notes||""});setSelPatient(null);}} style={{padding:"6px 11px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>Editar</button>
+                <button onClick={()=>setSelPatient(null)} style={{padding:"6px 11px",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:7,color:"rgba(255,255,255,.4)",fontSize:12,cursor:"pointer"}}>Cerrar</button>
+              </div>
+            </div>
+          </Card>
+          <Card style={{padding:18,marginBottom:14}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>Agregar nota clinica</div>
+            <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+              {["general","clinical","allergy","alert","followup","lab"].map(t=><button key={t} onClick={()=>setNoteType(t)} style={{padding:"4px 9px",borderRadius:6,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,background:noteType===t?"rgba(59,130,246,.3)":"rgba(255,255,255,.06)",color:noteType===t?"#60a5fa":"rgba(255,255,255,.4)"}}>{t}</button>)}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <input value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addNote();}} placeholder="Escribe la nota..." style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}/>
+              <Btn onClick={addNote} disabled={savingNote||!newNote.trim()} style={{fontSize:12,padding:"9px 14px"}}>{savingNote?"...":"Guardar"}</Btn>
+            </div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:5}}>Notas de tipo "allergy" y "alert" tambien se guardan en memoria de Sofia.</div>
+          </Card>
+          <Card>
+            <div style={{padding:"12px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:13,fontWeight:700}}>{patNotes.length} notas</div>
+            {patNotes.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin notas aun</div>}
+            {patNotes.map((n,i)=><div key={n.id} style={{padding:"12px 18px",borderBottom:i<patNotes.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}><Badge c={NOTE_C[n.note_type]||"blue"}>{n.note_type||"general"}</Badge><span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>{n.created_at?new Date(n.created_at).toLocaleString("es").slice(0,16):""}</span></div>
+              <div style={{fontSize:13,lineHeight:1.5}}>{n.content}</div>
+            </div>)}
+          </Card>
+          {patRecords.length>0&&<Card style={{marginTop:12}}>
+            <div style={{padding:"12px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:13,fontWeight:700}}>Historial clinico</div>
+            {patRecords.map((r,i)=><div key={r.id} style={{padding:"12px 18px",borderBottom:i<patRecords.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div><div style={{fontSize:13,fontWeight:600}}>{r.treatment||"Consulta"}</div>{r.diagnosis&&<div style={{fontSize:12,color:"rgba(255,255,255,.5)",marginTop:2}}>Dx: {r.diagnosis}</div>}</div>
+                <div style={{textAlign:"right"}}>{r.cost>0&&<div style={{fontSize:14,fontWeight:700,color:"#22c55e"}}>{curr} {r.cost}</div>}<div style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>{r.created_at?new Date(r.created_at).toLocaleDateString("es"):""}</div></div>
+              </div>
+            </div>)}
+          </Card>}
+        </div>}
+      </div>
+    </div>
+  </div>;
+}
+
+function TabCitas(){
+  const{clinic,appts,loadAll}=useApp();
+  const curr=clinic.currency||"EUR";
+  return<div className="animate-in">
+    <SectionHeader title="Citas" action={<Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>Actualizar</Btn>}/>
+    <Card>
+      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:13,color:"rgba(255,255,255,.4)"}}>{appts.length} citas en Supabase</div>
+      {appts.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas aun</div>}
+      {appts.map((a,i)=><div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 20px",borderBottom:i<appts.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{a.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment} {a.appointment_date||""}</div></div>
+        <div style={{fontSize:16,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif"}}>{curr} {a.price}</div>
+        <Badge c={a.status==="confirmed"?"green":a.status==="pending"?"yellow":"red"}>{a.status==="confirmed"?"Confirmada":a.status==="pending"?"Pendiente":"Cancelada"}</Badge>
+      </div>)}
+    </Card>
+  </div>;
+}
+
+function TabReservas(){
+  const{clinic,pendingBookings,confirmingId,confirmBooking,loadAll}=useApp();
+  const pending=pendingBookings.filter(b=>b.status==="pending");
+  const hist=pendingBookings.filter(b=>b.status!=="pending");
+  const cm={confirmed:{bg:"rgba(34,197,94,.1)",c:"#22c55e",l:"Confirmada"},rejected:{bg:"rgba(239,68,68,.1)",c:"#f87171",l:"Rechazada"},rescheduled:{bg:"rgba(59,130,246,.1)",c:"#60a5fa",l:"Reagendada"}};
+  return<div className="animate-in">
+    <SectionHeader title="Reservas" action={<div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>{pending.length} pendientes</span><Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>Actualizar</Btn></div>}/>
+    {pending.length===0&&<Card><div style={{padding:40,textAlign:"center",color:"rgba(255,255,255,.3)"}}><div style={{fontSize:32,marginBottom:8}}>✅</div>Sin solicitudes pendientes</div></Card>}
+    {pending.length>0&&<Card style={{marginBottom:14}}>
+      {pending.map((b,i,arr)=><div key={b.id} style={{display:"flex",alignItems:"center",gap:14,padding:"16px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.05)":"none"}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:3}}>{b.patient_name||"Paciente"}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:12,flexWrap:"wrap"}}><span>{b.treatment||"—"}</span><span>{b.requested_day||"—"}</span><span>{b.requested_time||"—"}</span>{b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>{b.patient_phone}</span>}</div>
+        </div>
+        <div style={{display:"flex",gap:8,flexShrink:0}}>
+          <button onClick={()=>confirmBooking(b.id,"confirm")} disabled={confirmingId===b.id} style={{padding:"8px 14px",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>{confirmingId===b.id?"...":"Confirmar"}</button>
+          <button onClick={()=>confirmBooking(b.id,"reschedule")} disabled={confirmingId===b.id} style={{padding:"8px 11px",background:"rgba(59,130,246,.2)",border:"1px solid rgba(59,130,246,.3)",borderRadius:8,color:"#60a5fa",fontSize:12,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>Reagendar</button>
+          <button onClick={()=>confirmBooking(b.id,"reject")} disabled={confirmingId===b.id} style={{padding:"8px 11px",background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.25)",borderRadius:8,color:"#f87171",fontSize:12,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>Rechazar</button>
+        </div>
+      </div>)}
+    </Card>}
+    {hist.length>0&&<><div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.35)",letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Historial</div>
+    <Card>{hist.map((b,i,arr)=>{const clr=cm[b.status]||{bg:"rgba(255,255,255,.05)",c:"rgba(255,255,255,.4)",l:b.status};return<div key={b.id} style={{display:"flex",alignItems:"center",gap:14,padding:"12px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:.75}}><div style={{flex:1}}><div style={{fontWeight:600,fontSize:13}}>{b.patient_name||"Paciente"}</div><div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>{b.treatment} {b.requested_day} {b.requested_time}</div></div><span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:clr.bg,color:clr.c}}>{clr.l}</span></div>;})}
+    </Card></>}
+  </div>;
+}
+
+function TabDoctores(){
+  const{clinic,doctors,loadAll,boom}=useApp();
+  const DOC_COLORS=["#3b82f6","#22c55e","#a855f7","#f59e0b","#ef4444","#06b6d4","#ec4899"];
+  const[editDoc,setEditDoc]=useState(null);
+  const[form,setForm]=useState({name:"",specialty:"",email:"",daily_capacity:8,color:"#3b82f6",bio:""});
+  const[saving,setSaving]=useState(false);
+  function reset(){setEditDoc(null);setForm({name:"",specialty:"",email:"",daily_capacity:8,color:"#3b82f6",bio:""});}
+  function startEdit(d){setEditDoc(d.id);setForm({name:d.name||"",specialty:d.specialty||"",email:d.email||"",daily_capacity:d.daily_capacity||d.slots_per_day||8,color:d.color||"#3b82f6",bio:d.bio||""});}
+  async function save(){
+    if(!form.name.trim())return;setSaving(true);
+    try{
+      const p={name:form.name,specialty:form.specialty,email:form.email||null,daily_capacity:parseInt(form.daily_capacity)||8,slots_per_day:parseInt(form.daily_capacity)||8,color:form.color,bio:form.bio||null};
+      if(editDoc){await dbPatch("doctors",p,{id:editDoc});boom("Doctor actualizado");}
+      else{await dbPost("doctors",Object.assign({},p,{clinic_id:clinic.id,active:true}));boom("Doctor creado");}
+      reset();await loadAll();
+    }catch(e){boom("Error: "+e.message);}setSaving(false);
+  }
+  async function toggleActive(d){
+    try{await dbPatch("doctors",{active:!d.active},{id:d.id});boom(d.active?"Desactivado":"Reactivado");await loadAll();}
+    catch(e){boom("Error: "+e.message);}
+  }
+  return<div className="animate-in">
+    <SectionHeader title="Doctores" action={<Btn onClick={reset} style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo doctor</Btn>}/>
+    <Card style={{padding:20,marginBottom:16}}>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"rgba(255,255,255,.6)"}}>{editDoc?"Editando doctor":"Nuevo doctor"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <Inp label="Nombre *" value={form.name} onChange={v=>setForm(p=>Object.assign({},p,{name:v}))} placeholder="Dr. Garcia"/>
+        <Inp label="Especialidad" value={form.specialty} onChange={v=>setForm(p=>Object.assign({},p,{specialty:v}))} placeholder="Cirugia oral"/>
+        <Inp label="Email" type="email" value={form.email} onChange={v=>setForm(p=>Object.assign({},p,{email:v}))} placeholder="dr@clinica.com"/>
+        <Inp label="Capacidad diaria" value={""+form.daily_capacity} onChange={v=>setForm(p=>Object.assign({},p,{daily_capacity:v}))} placeholder="8"/>
+      </div>
+      <Inp label="Biografia / especialidades" value={form.bio} onChange={v=>setForm(p=>Object.assign({},p,{bio:v}))} placeholder="Especialista en implantologia..."/>
+      <div style={{display:"flex",gap:10,marginTop:12,marginBottom:12,alignItems:"center"}}>
+        <span style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Color:</span>
+        {DOC_COLORS.map(c=><button key={c} onClick={()=>setForm(p=>Object.assign({},p,{color:c}))} style={{width:22,height:22,borderRadius:"50%",background:c,border:form.color===c?"3px solid #fff":"2px solid transparent",cursor:"pointer"}}/>)}
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <Btn onClick={save} disabled={saving||!form.name} style={{fontSize:12,padding:"8px 16px"}}>{saving?"Guardando...":(editDoc?"Actualizar":"Crear doctor")}</Btn>
+        {editDoc&&<Btn variant="ghost" onClick={reset} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>}
+      </div>
+    </Card>
+    <Card>
+      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{doctors.filter(d=>d.active!==false).length} activos · {doctors.filter(d=>d.active===false).length} inactivos</span>
+        <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"3px 10px"}}>Actualizar</Btn>
+      </div>
+      {doctors.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer doctor</div>}
+      {doctors.map((d,i)=><div key={d.id} style={{display:"flex",alignItems:"center",gap:14,padding:"16px 20px",borderBottom:i<doctors.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:d.active===false?0.45:1}}>
+        <div style={{width:44,height:44,borderRadius:"50%",background:d.color||"#3b82f6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>👨‍⚕️</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:14,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>{d.name}<Badge c={d.active!==false?"green":"red"}>{d.active!==false?"Activo":"Inactivo"}</Badge></div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:2}}>{d.specialty||"Sin especialidad"} — {d.daily_capacity||d.slots_per_day||8} citas/dia</div>
+          {d.email&&<div style={{fontSize:11,color:"rgba(255,255,255,.25)",marginTop:1}}>{d.email}</div>}
+        </div>
+        <div style={{textAlign:"right",padding:"8px 14px",background:"rgba(59,130,246,.07)",border:"1px solid rgba(59,130,246,.15)",borderRadius:10}}>
+          <div style={{fontSize:20,fontWeight:800,color:"#60a5fa",fontFamily:"'Syne',sans-serif"}}>{(d.daily_capacity||d.slots_per_day||8)*5}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,.3)"}}>citas/sem</div>
+        </div>
+        <div style={{display:"flex",gap:6,flexShrink:0}}>
+          <button onClick={()=>{startEdit(d);window.scrollTo(0,0);}} style={{padding:"7px 11px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>Editar</button>
+          <button onClick={()=>toggleActive(d)} style={{padding:"7px 11px",background:d.active!==false?"rgba(239,68,68,.1)":"rgba(34,197,94,.1)",border:"1px solid "+(d.active!==false?"rgba(239,68,68,.25)":"rgba(34,197,94,.25)"),borderRadius:7,color:d.active!==false?"#f87171":"#22c55e",fontSize:12,cursor:"pointer"}}>{d.active!==false?"Desactivar":"Reactivar"}</button>
+        </div>
+      </div>)}
+    </Card>
+  </div>;
+}
+
+function TabPrecios(){
+  const{clinic,treats,loadAll,boom}=useApp();
+  const curr=clinic.currency||"EUR";
+  const[editTreat,setEditTreat]=useState(null);
+  const[form,setForm]=useState({name:"",price:"",price_mode:"exact",duration:30});
+  const[saving,setSaving]=useState(false);
+  function reset(){setEditTreat(null);setForm({name:"",price:"",price_mode:"exact",duration:30});}
+  async function save(){
+    if(!form.name.trim()||!form.price)return;setSaving(true);
+    try{
+      const p={name:form.name,price:parseFloat(form.price),price_mode:form.price_mode,duration:parseInt(form.duration)||30,active:true};
+      if(editTreat){await dbPatch("treatments",p,{id:editTreat});boom("Tratamiento actualizado");}
+      else{await dbPost("treatments",Object.assign({},p,{clinic_id:clinic.id}));boom("Tratamiento creado");}
+      reset();await loadAll();
+    }catch(e){boom("Error: "+e.message);}setSaving(false);
+  }
+  async function toggleActive(t){
+    try{await dbPatch("treatments",{active:!t.active},{id:t.id});boom(t.active?"Desactivado":"Activado");await loadAll();}
+    catch(e){boom("Error: "+e.message);}
+  }
+  return<div className="animate-in">
+    <SectionHeader title="Tratamientos y precios" action={<Btn onClick={reset} style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo</Btn>}/>
+    <Card style={{padding:20,marginBottom:16}}>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"rgba(255,255,255,.6)"}}>{editTreat?"Editando tratamiento":"Nuevo tratamiento"}</div>
+      <div style={{marginBottom:12}}>
+        <TreatmentInput value={form.name} onChange={v=>setForm(p=>Object.assign({},p,{name:v}))} onSelect={s=>setForm(p=>Object.assign({},p,{name:s.n,duration:s.d,price_mode:s.m}))}/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12}}>
+        <Inp label={"Precio ("+curr+")"} value={form.price} onChange={v=>setForm(p=>Object.assign({},p,{price:v}))} placeholder="80"/>
+        <Sel label="Tipo de precio" value={form.price_mode} onChange={v=>setForm(p=>Object.assign({},p,{price_mode:v}))} opts={[["exact","Precio fijo"],["from","Desde..."],["consult","Consultar"]]}/>
+        <Inp label="Duracion (min)" value={""+form.duration} onChange={v=>setForm(p=>Object.assign({},p,{duration:v}))} placeholder="45"/>
+      </div>
+      <div style={{display:"flex",gap:10}}>
+        <Btn onClick={save} disabled={saving||!form.name||!form.price} style={{fontSize:12,padding:"8px 16px"}}>{saving?"Guardando...":(editTreat?"Actualizar":"Guardar tratamiento")}</Btn>
+        {editTreat&&<Btn variant="ghost" onClick={reset} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>}
+      </div>
+    </Card>
+    <Card>
+      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{treats.filter(t=>t.active!==false).length} activos · {treats.filter(t=>t.active===false).length} inactivos</span>
+        <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"3px 10px"}}>Actualizar</Btn>
+      </div>
+      {treats.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer tratamiento</div>}
+      {treats.map((t,i)=><div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"13px 20px",borderBottom:i<treats.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:t.active===false?0.4:1}}>
+        <span style={{fontSize:20}}>🦷</span>
+        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{t.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{(t.duration||30)+" min · "+(t.price_mode==="exact"?"Fijo":t.price_mode==="from"?"Desde":"Consultar")}</div></div>
+        <div style={{fontSize:18,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",minWidth:80,textAlign:"right"}}>{t.price_mode==="consult"?"Consulta":curr+" "+t.price}</div>
+        <div style={{display:"flex",gap:6,flexShrink:0}}>
+          <button onClick={()=>{setEditTreat(t.id);setForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30});}} style={{padding:"6px 10px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>Editar</button>
+          <button onClick={()=>toggleActive(t)} style={{padding:"6px 10px",background:t.active!==false?"rgba(239,68,68,.1)":"rgba(34,197,94,.1)",border:"1px solid "+(t.active!==false?"rgba(239,68,68,.25)":"rgba(34,197,94,.25)"),borderRadius:7,color:t.active!==false?"#f87171":"#22c55e",fontSize:12,cursor:"pointer"}}>{t.active!==false?"Desactivar":"Activar"}</button>
+        </div>
+      </div>)}
+    </Card>
+  </div>;
+}
+
+function TabSofia(){
+  const{clinic,msgs,chat,chatIn,setChatIn,chatLoad,sofiaMode,setSofiaMode,mic,micStatus,toggleMic,sendChat,setChat,loadAll}=useApp();
+  const bc=clinic.brand_color||"#0066ff";
+  const chatRef=useRef(null);
+  useEffect(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight;},[chat]);
+  return<div className="animate-in">
+    <div style={{display:"flex",gap:8,marginBottom:20,padding:"12px 16px",background:"rgba(255,255,255,.025)",borderRadius:12,border:"1px solid rgba(255,255,255,.07)",alignItems:"center",flexWrap:"wrap"}}>
+      <span style={{fontSize:12,color:"rgba(255,255,255,.4)",marginRight:4}}>Modo:</span>
+      {[["reception","Recepcion"],["doctor","Dr. Copiloto"],["reports","Reportes"]].map(([m,label])=>
+        <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofia de "+clinic.name+".",doctor:"Buenos dias doctor.",reports:"Listo para darte metricas."}[m]}]);}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,"+bc+",#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",fontSize:13,fontWeight:sofiaMode===m?700:400,transition:"all .2s"}}>{label}</button>
+      )}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 380px",gap:20}}>
+      <div>
+        <h2 style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,margin:"0 0 14px"}}>Mensajes en Supabase</h2>
+        <Card>
+          <div style={{padding:"12px 18px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{msgs.length} mensajes</span>
+            <Btn onClick={loadAll} variant="ghost" style={{fontSize:11,padding:"4px 10px"}}>Actualizar</Btn>
+          </div>
+          <div style={{maxHeight:420,overflowY:"auto",padding:"10px 14px"}}>
+            {msgs.length===0&&<div style={{textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:13,padding:20}}>Prueba el chat de Sofia</div>}
+            {msgs.map(m=><div key={m.id} style={{display:"flex",justifyContent:m.direction==="outbound"?"flex-end":"flex-start",marginBottom:8}}>
+              <div style={{maxWidth:"80%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.direction==="outbound"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.direction==="outbound"?"linear-gradient(135deg,"+bc+",#0044cc)":"rgba(255,255,255,.07)"}}>
+                <div style={{fontSize:10,color:"rgba(255,255,255,.35)",marginBottom:2}}>{m.patient_name}</div>{m.content}
+              </div>
+            </div>)}
+          </div>
+        </Card>
+      </div>
+      <div>
+        <div style={{fontFamily:"'Syne',sans-serif",fontSize:14,fontWeight:700,marginBottom:10}}>Sofia en vivo</div>
+        <Card>
+          <div style={{padding:"12px 16px",background:"rgba(0,100,255,.05)",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:34,height:34,borderRadius:"50%",background:"linear-gradient(135deg,"+bc+",#00d4ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>🦷</div>
+            <div><div style={{fontWeight:700,fontSize:13}}>Sofia — {clinic.name}</div><div style={{fontSize:10,color:"#22c55e"}}>Activa · {sofiaMode}</div></div>
+            {micStatus&&<div style={{marginLeft:"auto",fontSize:11,color:mic?"#22c55e":"#60a5fa",maxWidth:120,textAlign:"right",lineHeight:1.3}}>{micStatus}</div>}
+          </div>
+          <div ref={chatRef} style={{height:300,overflowY:"auto",padding:13,display:"flex",flexDirection:"column",gap:9}}>
+            {chat.map((m,i)=><div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"88%",padding:"8px 12px",fontSize:12,lineHeight:1.5,borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?"linear-gradient(135deg,"+bc+",#0044cc)":"rgba(255,255,255,.07)"}}>{m.content}</div>
+            </div>)}
+            {chatLoad&&<div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:"rgba(255,255,255,.3)",animation:"bounce 1s "+(i*0.2)+"s infinite"}}/>)}</div>}
+          </div>
+          <div style={{padding:"11px 13px",borderTop:"1px solid rgba(255,255,255,.08)"}}>
+            <div style={{display:"flex",gap:8}}>
+              <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")sendChat();}} placeholder={mic?"Grabando...":"Escribe o habla con Sofia..."} style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.06)",border:"1px solid "+(mic?"rgba(34,197,94,.5)":"rgba(255,255,255,.12)"),borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit"}}/>
+              <button onClick={toggleMic} className={mic?"mic-on":""} style={{width:40,height:40,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:mic?"#ef4444":"rgba(255,255,255,.1)",border:"2px solid "+(mic?"#ef4444":"rgba(255,255,255,.2)"),borderRadius:9,cursor:"pointer",fontSize:18}}>{mic?"⏹":"🎤"}</button>
+              <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{width:40,height:40,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,"+bc+",#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:16,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.4:1}}>➤</button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  </div>;
+}
+
+function TabConfig(){
+  const{clinic,setClinic,boom}=useApp();
+  const[form,setForm]=useState({name:clinic.name||"",city:clinic.city||"",country:clinic.country||"",phone:clinic.phone||"",currency:clinic.currency||"EUR",timezone:clinic.timezone||"Europe/Madrid",language:clinic.language||"es",hours_mon_fri:clinic.hours_mon_fri||"9:00-18:00",hours_saturday:clinic.hours_saturday||"Cerrado",brand_color:clinic.brand_color||"#0066ff"});
+  const[saving,setSaving]=useState(false);
+  async function save(){
+    setSaving(true);
+    try{
+      const upd=await sb.from("clinics").update({name:form.name,city:form.city,country:form.country,phone:form.phone,currency:form.currency,timezone:form.timezone,language:form.language,hours_mon_fri:form.hours_mon_fri,hours_saturday:form.hours_saturday,brand_color:form.brand_color}).eq("id",clinic.id).select();
+      if(upd.error)throw new Error(upd.error.message);
+      setClinic(upd.data&&upd.data[0]?upd.data[0]:Object.assign({},clinic,form));
+      boom("Configuracion guardada");
+    }catch(e){boom("Error: "+e.message);}setSaving(false);
+  }
+  return<div className="animate-in">
+    <div style={{marginBottom:24}}>
+      <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>Configuracion de clinica</h1>
+      <div style={{fontSize:13,color:"rgba(255,255,255,.35)",marginTop:6}}>Sofia y el panel usan estos datos automaticamente.</div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
+        <Card style={{padding:22}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#60a5fa"}}>Informacion basica</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <Inp label="Nombre de la clinica *" value={form.name} onChange={v=>setForm(p=>Object.assign({},p,{name:v}))} placeholder="Mi Clinica Dental"/>
+            <Inp label="Ciudad" value={form.city} onChange={v=>setForm(p=>Object.assign({},p,{city:v}))} placeholder="Madrid"/>
+            <Inp label="Pais (codigo ISO)" value={form.country} onChange={v=>setForm(p=>Object.assign({},p,{country:v}))} placeholder="ES"/>
+            <Inp label="Telefono / WhatsApp" value={form.phone} onChange={v=>setForm(p=>Object.assign({},p,{phone:v}))} placeholder="+34 600 000 000"/>
+          </div>
+        </Card>
+        <Card style={{padding:22}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#60a5fa"}}>Horarios de atencion</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <Inp label="Lunes a Viernes" value={form.hours_mon_fri} onChange={v=>setForm(p=>Object.assign({},p,{hours_mon_fri:v}))} placeholder="9:00-18:00"/>
+            <Inp label="Sabados" value={form.hours_saturday} onChange={v=>setForm(p=>Object.assign({},p,{hours_saturday:v}))} placeholder="Cerrado"/>
+          </div>
+        </Card>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
+        <Card style={{padding:22}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#60a5fa"}}>Regional</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <Sel label="Moneda" value={form.currency} onChange={v=>setForm(p=>Object.assign({},p,{currency:v}))} opts={[["EUR","EUR — Euro"],["USD","USD — Dolar"],["GBP","GBP — Libra"],["DOP","DOP — Peso"],["CRC","CRC — Colon"],["HRK","HRK — Kuna"]]}/>
+            <Sel label="Idioma de Sofia" value={form.language} onChange={v=>setForm(p=>Object.assign({},p,{language:v}))} opts={[["es","Espanol"],["en","English"],["hr","Hrvatski"],["de","Deutsch"],["fr","Francais"],["pt","Portugues"]]}/>
+            <Sel label="Zona horaria" value={form.timezone} onChange={v=>setForm(p=>Object.assign({},p,{timezone:v}))} opts={[["Europe/Madrid","Madrid / Barcelona"],["Europe/Zagreb","Zagreb"],["America/El_Salvador","El Salvador"],["America/Santo_Domingo","Santo Domingo"],["America/New_York","Nueva York"],["Europe/London","Londres"]]}/>
+          </div>
+        </Card>
+        <Card style={{padding:22}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#60a5fa"}}>Color de marca</div>
+          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12}}>
+            <input type="color" value={form.brand_color} onChange={e=>setForm(p=>Object.assign({},p,{brand_color:e.target.value}))} style={{width:44,height:44,padding:2,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,cursor:"pointer"}}/>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {["#0066ff","#22c55e","#a855f7","#f59e0b","#ef4444","#06b6d4"].map(c=><button key={c} onClick={()=>setForm(p=>Object.assign({},p,{brand_color:c}))} style={{width:26,height:26,borderRadius:6,background:c,border:form.brand_color===c?"2px solid #fff":"2px solid transparent",cursor:"pointer"}}/>)}
+            </div>
+          </div>
+          <div style={{padding:"8px 12px",background:"rgba(255,255,255,.03)",borderRadius:8,fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:12}}>Preview: <span style={{color:form.brand_color,fontWeight:700}}>{form.name||"Tu Clinica"}</span></div>
+          <Inp label="Email (solo lectura)" value={clinic.email||""} onChange={()=>{}} readOnly/>
+        </Card>
+        <Btn onClick={save} disabled={saving||!form.name} full style={{padding:14,fontSize:15}}>{saving?"Guardando...":"Guardar configuracion"}</Btn>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── SECTION 7: SIDEBAR ────────────────────────────────────────
+function Sidebar(){
+  const{clinic,tab,setTab,leads,pendingBookings,patients,signOut}=useApp();
+  const bc=clinic.brand_color||"#0066ff";
+  const curr=clinic.currency||"EUR";
+  const pending=pendingBookings.filter(b=>b.status==="pending").length;
+  const activePats=patients.filter(p=>p.active!==false).length;
+  const TABS=[
+    {id:"dashboard", label:"Dashboard"},
+    {id:"pacientes", label:"Pacientes",   badge:activePats>0?activePats:0,   bc:"blue"},
+    {id:"citas",     label:"Citas"},
+    {id:"reservas",  label:"Reservas",    badge:pending>0?pending:0,         bc:"yellow"},
+    {id:"doctores",  label:"Doctores"},
+    {id:"precios",   label:"Precios"},
+    {id:"sofia",     label:"Sofia IA"},
+    {id:"config",    label:"Configuracion", dot:!clinic.city||!clinic.phone},
+  ];
+  return<div style={{width:216,flexShrink:0,background:"rgba(255,255,255,.018)",borderRight:"1px solid rgba(255,255,255,.06)",display:"flex",flexDirection:"column",padding:"20px 0",position:"fixed",top:0,bottom:0,left:0,zIndex:100,overflowY:"auto"}}>
+    <div style={{padding:"0 16px 14px"}}>
+      <div style={{fontFamily:"'Syne',sans-serif",fontSize:20,fontWeight:800,background:"linear-gradient(135deg,"+bc+",#00d4ff)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>CliniFlow</div>
+    </div>
+    <div style={{margin:"0 10px 12px",padding:"12px 14px",background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12}}>
+      <div style={{fontSize:13,fontWeight:700}}>{clinic.name}</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{clinic.city}{clinic.country?" · "+clinic.country:""}</div>
+      <div style={{marginTop:7,display:"flex",gap:5,flexWrap:"wrap"}}>
+        <Badge c="green">{"● "+(clinic.plan||"trial").toUpperCase()}</Badge>
+        <Badge c="blue">{curr}</Badge>
+      </div>
+    </div>
+    <nav style={{flex:1,padding:"0 8px"}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{width:"100%",textAlign:"left",padding:"9px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:9,background:tab===t.id?"rgba(0,100,255,.15)":"transparent",borderLeft:tab===t.id?"2px solid "+bc:"2px solid transparent"}}>
+        <span style={{fontSize:13,fontWeight:tab===t.id?600:400,color:tab===t.id?"#60a5fa":"rgba(255,255,255,.4)",flex:1}}>{t.label}</span>
+        {t.badge>0&&<span style={{fontSize:10,background:t.bc==="yellow"?"rgba(234,179,8,.25)":"rgba(59,130,246,.2)",color:t.bc==="yellow"?"#fbbf24":"#60a5fa",padding:"1px 7px",borderRadius:10,fontWeight:700}}>{t.badge}</span>}
+        {t.dot&&<span style={{width:7,height:7,borderRadius:"50%",background:"#f59e0b",flexShrink:0}}/>}
+      </button>)}
+    </nav>
+    <div style={{padding:"12px 10px",borderTop:"1px solid rgba(255,255,255,.05)"}}>
+      <button onClick={signOut} style={{width:"100%",padding:"8px",background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.15)",borderRadius:8,color:"#ef4444",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cerrar sesion</button>
+    </div>
+  </div>;
+}
+
+// ── SECTION 8: APP PROVIDER (all state + CRUD) ────────────────
+function App(){
+  const[clinic,setClinic]=useState(null);
+  const[tab,setTab]=useState("dashboard");
+  const[leads,setLeads]=useState([]);
+  const[appts,setAppts]=useState([]);
+  const[pendingBookings,setPendingBookings]=useState([]);
+  const[doctors,setDoctors]=useState([]);
+  const[treats,setTreats]=useState([]);
+  const[msgs,setMsgs]=useState([]);
+  const[patients,setPatients]=useState([]);
+  const[selPatient,setSelPatient]=useState(null);
+  const[patNotes,setPatNotes]=useState([]);
+  const[patRecords,setPatRecords]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[toast,setToast]=useState("");
+  const[chat,setChat]=useState([]);
+  const[chatIn,setChatIn]=useState("");
+  const[chatLoad,setChatLoad]=useState(false);
+  const[sofiaMode,setSofiaMode]=useState("reception");
+  const[mic,setMic]=useState(false);
+  const[micStatus,setMicStatus]=useState("");
+  const[confirmingId,setConfirmingId]=useState(null);
+
+  useEffect(()=>{if(clinic)loadAll();},[clinic]);
+  useEffect(()=>{if(clinic&&treats.length>0)setChat([{role:"assistant",content:"Hola! Soy Sofia de "+clinic.name+". En que te ayudo?"}]);},[treats]);
+
+  function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3500);}
+
+  async function loadAll(){
+    setLoading(true);
+    try{
+      const[l,a,p,d,t,m,pts]=await Promise.all([
+        dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
+        dbGet("appointments",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
+        dbGet("pending_bookings",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
+        dbGet("doctors",{eq:{clinic_id:clinic.id},order:"created_at.asc"}),
+        dbGet("treatments",{eq:{clinic_id:clinic.id},order:"name.asc"}),
+        dbGet("messages",{eq:{clinic_id:clinic.id},order:"created_at.asc",limit:50}),
+        dbGet("patients",{eq:{clinic_id:clinic.id},order:"name.asc",limit:100}),
+      ]);
+      setLeads(Array.isArray(l)?l:[]);setAppts(Array.isArray(a)?a:[]);
+      setPendingBookings(Array.isArray(p)?p:[]);setDoctors(Array.isArray(d)?d:[]);
+      setTreats(Array.isArray(t)?t:[]);setMsgs(Array.isArray(m)?m:[]);
+      setPatients(Array.isArray(pts)?pts:[]);
+    }catch(e){boom("Error al cargar: "+e.message);}setLoading(false);
+  }
+
+  async function selectPatient(p){
+    setSelPatient(p);
+    try{
+      const[notes,records]=await Promise.all([
+        dbGet("patient_notes",{eq:{patient_id:p.id},order:"created_at.desc",limit:20}),
+        dbGet("clinical_records",{eq:{patient_id:p.id},order:"created_at.desc",limit:10}),
+      ]);
+      setPatNotes(Array.isArray(notes)?notes:[]);
+      setPatRecords(Array.isArray(records)?records:[]);
+    }catch(e){boom("Error: "+e.message);}
+  }
+
+  async function confirmBooking(bookingId,action){
+    setConfirmingId(bookingId);
+    try{
+      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
+      const data=await r.json();
+      if(data.success){boom({confirm:"Cita confirmada",reject:"Rechazada",reschedule:"Reagendada"}[action]||"OK");await loadAll();}
+      else boom("Error: "+(data.error||"intenta de nuevo"));
+    }catch(e){boom("Error: "+e.message);}setConfirmingId(null);
+  }
+
+  async function askSofia(text){
+    if(!text||!text.trim()||chatLoad)return;
+    const next=[...chat,{role:"user",content:text}];
+    setChat(next);setChatIn("");setChatLoad(true);
+    try{
+      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+      if(!r.ok)throw new Error("sofia-chat "+r.status);
+      const data=await r.json();const reply=data.text||"...";
+      setChat(p=>[...p,{role:"assistant",content:reply}]);
+      if(window.speechSynthesis){window.speechSynthesis.cancel();const utt=new window.SpeechSynthesisUtterance(reply.replace(/[*_#]/g,"").substring(0,300));utt.lang=clinic.language||"es-ES";utt.rate=0.93;window.speechSynthesis.speak(utt);}
+      await dbPost("messages",{clinic_id:clinic.id,patient_name:"Visitante",patient_phone:"demo",content:text,direction:"inbound"});
+      await dbPost("messages",{clinic_id:clinic.id,patient_name:"Sofia IA",patient_phone:"sofia",content:reply,direction:"outbound"});
+    }catch(e){setChat(p=>[...p,{role:"assistant",content:"Error: "+e.message}]);}setChatLoad(false);
+  }
+  function sendChat(){if(!chatIn.trim()||chatLoad)return;askSofia(chatIn);}
+
+  async function toggleMic(){
+    if(!navigator.mediaDevices){boom("Usa Chrome o Edge para voz");return;}
+    if(mic){setMic(false);setMicStatus("");return;}
+    setMicStatus("Solicitando microfono...");
+    let stream;
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true}});}
+    catch(err){const m={NotAllowedError:"Permiso denegado.",NotFoundError:"No se encontro microfono."};setMicStatus(m[err.name]||err.name);boom(m[err.name]||err.name);setTimeout(()=>setMicStatus(""),5000);return;}
+    const mt=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus":"audio/webm";
+    const rec=new MediaRecorder(stream,{mimeType:mt});const chunks=[];
+    rec.ondataavailable=e=>{if(e.data&&e.data.size>0)chunks.push(e.data);};
+    rec.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());setMicStatus("Transcribiendo...");setMic(false);
+      const blob=new Blob(chunks,{type:mt});if(blob.size<1000){setMicStatus("Audio muy corto");setTimeout(()=>setMicStatus(""),3000);return;}
+      try{
+        const r=await fetch("/api/sofia-voice?clinic_id="+clinic.id+"&mode="+sofiaMode,{method:"POST",headers:{"Content-Type":mt},body:blob});
+        if(!r.ok){setMicStatus("Error "+r.status);setTimeout(()=>setMicStatus(""),5000);return;}
+        const data=await r.json();if(!data.transcript){setMicStatus("Sin voz");setTimeout(()=>setMicStatus(""),3000);return;}
+        setMicStatus(data.transcript.substring(0,40));
+        setChat(p=>[...p,{role:"user",content:data.transcript},{role:"assistant",content:data.reply}]);
+        if(data.reply&&window.speechSynthesis){window.speechSynthesis.cancel();const utt=new window.SpeechSynthesisUtterance(data.reply.replace(/[*_#]/g,"").substring(0,300));utt.lang=clinic.language||"es-ES";utt.rate=0.93;window.speechSynthesis.speak(utt);}
+        setTimeout(()=>setMicStatus(""),4000);
+      }catch(fe){setMicStatus("Error de red");setTimeout(()=>setMicStatus(""),5000);}
+    };
+    setMic(true);setMicStatus("Grabando...");rec.start();
+    setTimeout(()=>{if(rec.state==="recording"){rec.stop();setMicStatus("Procesando...");}},8000);
+  }
+
+  async function signOut(){await sb.auth.signOut();setClinic(null);}
+
+  if(!clinic)return<Login onLogin={(c,s)=>setClinic(c)}/>;
+
+  const ctx={
+    clinic,setClinic,tab,setTab,leads,appts,pendingBookings,doctors,treats,msgs,patients,
+    selPatient,setSelPatient,patNotes,patRecords,
+    loading,chat,setChat,chatIn,setChatIn,chatLoad,sofiaMode,setSofiaMode,
+    mic,micStatus,confirmingId,
+    loadAll,boom,selectPatient,confirmBooking,sendChat,toggleMic,signOut,
+  };
+
+  const TAB_COMPONENTS={
+    dashboard:<TabDashboard/>,pacientes:<TabPacientes/>,citas:<TabCitas/>,
+    reservas:<TabReservas/>,doctores:<TabDoctores/>,precios:<TabPrecios/>,
+    sofia:<TabSofia/>,config:<TabConfig/>,
+  };
+
+  return<AppCtx.Provider value={ctx}>
+    <Toast msg={toast}/>
+    <div style={{display:"flex",minHeight:"100vh"}}>
+      <Sidebar/>
+      <div style={{marginLeft:216,flex:1,padding:"28px 30px",minHeight:"100vh"}}>
+        {loading?<Spinner/>:TAB_COMPONENTS[tab]||<TabDashboard/>}
+      </div>
+    </div>
+  </AppCtx.Provider>;
+}
+
+// ── SECTION 9: MOUNT ──────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
