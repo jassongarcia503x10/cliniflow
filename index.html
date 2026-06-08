@@ -410,18 +410,220 @@ function TabPacientes(){
 }
 
 function TabCitas(){
-  const{clinic,appts,loadAll}=useApp();
+  const{clinic,appts,doctors,treats,patients,loadAll,boom}=useApp();
   const curr=clinic.currency||"EUR";
+  const bc=clinic.brand_color||"#0066ff";
+
+  // Local state for appointment form
+  const[showForm,setShowForm]=useState(false);
+  const[editAppt,setEditAppt]=useState(null);
+  const[saving,setSaving]=useState(false);
+  const[todayOnly,setTodayOnly]=useState(true);
+  const[form,setForm]=useState({patient_id:"",doctor_id:"",treatment_id:"",date:"",start_hour:"09",start_min:"00",duration:"30",notes:"",price:""});
+
+  // Fetch appointments from API
+  const[apiAppts,setApiAppts]=useState([]);
+  const[loadingAppts,setLoadingAppts]=useState(false);
+  async function fetchAppts(){
+    setLoadingAppts(true);
+    try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      let url="/api/appointments";
+      if(todayOnly){const d=new Date().toISOString().slice(0,10);url+="?date="+d;}
+      const r=await fetch(url,{headers:{Authorization:"Bearer "+jwt}});
+      const data=await r.json();
+      setApiAppts(Array.isArray(data)?data:[]);
+    }catch(e){boom("Error cargando citas: "+e.message);}
+    setLoadingAppts(false);
+  }
+  useEffect(()=>{if(clinic)fetchAppts();},[clinic,todayOnly]);
+
+  function resetForm(){setForm({patient_id:"",doctor_id:"",treatment_id:"",date:"",start_hour:"09",start_min:"00",duration:"30",notes:"",price:""});setEditAppt(null);setShowForm(false);}
+
+  async function saveAppt(){
+    if(!form.doctor_id||!form.date||!form.start_hour)return boom("Completa doctor, fecha y hora");
+    setSaving(true);
+    try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      const start=new Date(form.date+"T"+form.start_hour+":"+form.start_min+":00");
+      const end=new Date(start.getTime()+parseInt(form.duration||30)*60000);
+      // Auto-fill price from treatment
+      let price=form.price;
+      if(!price&&form.treatment_id){
+        const tx=treats.find(t=>t.id===form.treatment_id);
+        if(tx&&tx.price)price=tx.price;
+      }
+      const body={
+        patient_id:form.patient_id||null,
+        doctor_id:form.doctor_id,
+        treatment_id:form.treatment_id||null,
+        start_time:start.toISOString(),
+        end_time:end.toISOString(),
+        duration_minutes:parseInt(form.duration)||30,
+        notes:form.notes||null,
+        price:parseFloat(price)||0,
+        source:"manual",
+      };
+      const method=editAppt?"PATCH":"POST";
+      if(editAppt)body.id=editAppt;
+      const r=await fetch("/api/appointments",{method,headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify(body)});
+      const data=await r.json();
+      if(!r.ok)throw new Error(data.error||(data.conflict?"Horario ocupado: "+new Date(data.conflict.start_time).toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"}):r.status));
+      boom(editAppt?"Cita actualizada":"Cita creada");
+      resetForm();fetchAppts();
+    }catch(e){boom("Error: "+e.message);}setSaving(false);
+  }
+
+  async function changeStatus(apptId,status,reason){
+    try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      const body={id:apptId,status};
+      if(reason)body.cancelled_reason=reason;
+      const r=await fetch("/api/appointments",{method:"PATCH",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify(body)});
+      const data=await r.json();
+      if(!r.ok)throw new Error(data.error||r.status);
+      boom({confirmed:"Confirmada",checked_in:"Check-in realizado",in_chair:"Tratamiento iniciado",completed:"Completada",cancelled:"Cancelada",no_show:"No-show registrado"}[status]||"Actualizado");
+      fetchAppts();
+    }catch(e){boom("Error: "+e.message);}
+  }
+
+  const STATUS_UI={
+    pending:    {c:"rgba(234,179,8,.15)",  t:"#fbbf24", label:"Pendiente"},
+    confirmed:  {c:"rgba(59,130,246,.15)", t:"#60a5fa", label:"Confirmada"},
+    checked_in: {c:"rgba(168,85,247,.15)", t:"#c084fc", label:"En sala"},
+    in_chair:   {c:"rgba(249,115,22,.15)", t:"#fb923c", label:"En silla"},
+    completed:  {c:"rgba(34,197,94,.15)",  t:"#22c55e", label:"Completada"},
+    cancelled:  {c:"rgba(239,68,68,.12)",  t:"#f87171", label:"Cancelada"},
+    no_show:    {c:"rgba(100,116,139,.15)",t:"#94a3b8", label:"No se presentó"},
+  };
+  const NEXT_STATUS={
+    pending:["confirmed","cancelled"],
+    confirmed:["checked_in","cancelled","no_show"],
+    checked_in:["in_chair","cancelled"],
+    in_chair:["completed"],
+    completed:[],
+    cancelled:[],
+    no_show:[],
+  };
+
   return<div className="animate-in">
-    <SectionHeader title="Citas" action={<Btn onClick={loadAll} variant="ghost" style={{fontSize:12,padding:"6px 14px"}}>Actualizar</Btn>}/>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:26,fontWeight:800,margin:0}}>Agenda</h1>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,color:"rgba(255,255,255,.5)",cursor:"pointer"}}>
+          <input type="checkbox" checked={todayOnly} onChange={e=>setTodayOnly(e.target.checked)}/>
+          Solo hoy
+        </label>
+        <Btn onClick={fetchAppts} variant="ghost" style={{fontSize:12,padding:"6px 12px"}}>Actualizar</Btn>
+        <Btn onClick={()=>{resetForm();setShowForm(true);}} style={{fontSize:12,padding:"6px 14px"}}>+ Nueva cita</Btn>
+      </div>
+    </div>
+
+    {/* FORM */}
+    {showForm&&<Card style={{padding:22,marginBottom:18,border:"1px solid rgba(59,130,246,.25)"}}>
+      <div style={{fontFamily:"'Syne',sans-serif",fontSize:15,fontWeight:700,marginBottom:16,color:"#60a5fa"}}>{editAppt?"Editar cita":"Nueva cita"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Paciente</label>
+          <select value={form.patient_id} onChange={e=>setForm(p=>Object.assign({},p,{patient_id:e.target.value}))} style={{padding:"11px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+            <option value="">— Sin asignar —</option>
+            {patients.filter(p=>p.active!==false).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Doctor *</label>
+          <select value={form.doctor_id} onChange={e=>{const d=doctors.find(x=>x.id===e.target.value);setForm(p=>Object.assign({},p,{doctor_id:e.target.value}));}} style={{padding:"11px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+            <option value="">— Seleccionar —</option>
+            {doctors.filter(d=>d.active!==false).map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Tratamiento</label>
+          <select value={form.treatment_id} onChange={e=>{const t=treats.find(x=>x.id===e.target.value);setForm(p=>Object.assign({},p,{treatment_id:e.target.value,duration:t?(t.duration||30)+"":"30",price:t?(t.price||"")+"":""}));}} style={{padding:"11px 12px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+            <option value="">— Sin asignar —</option>
+            {treats.filter(t=>t.active!==false).map(t=><option key={t.id} value={t.id}>{t.name} ({curr}{t.price})</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px 80px 100px",gap:12,marginBottom:12}}>
+        <Inp label="Fecha *" type="date" value={form.date} onChange={v=>setForm(p=>Object.assign({},p,{date:v}))}/>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Hora</label>
+          <select value={form.start_hour} onChange={e=>setForm(p=>Object.assign({},p,{start_hour:e.target.value}))} style={{padding:"11px 8px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+            {Array.from({length:12},(_,i)=>i+8).map(h=><option key={h} value={String(h).padStart(2,"0")}>{String(h).padStart(2,"0")}</option>)}
+          </select>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:12,color:"rgba(255,255,255,.4)"}}>Min</label>
+          <select value={form.start_min} onChange={e=>setForm(p=>Object.assign({},p,{start_min:e.target.value}))} style={{padding:"11px 8px",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,color:"#fff",fontSize:13,outline:"none",fontFamily:"inherit"}}>
+            {["00","15","30","45"].map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <Inp label="Dur (min)" value={form.duration} onChange={v=>setForm(p=>Object.assign({},p,{duration:v}))} placeholder="30"/>
+        <Inp label={"Precio "+curr} value={form.price} onChange={v=>setForm(p=>Object.assign({},p,{price:v}))} placeholder="0"/>
+      </div>
+      <Inp label="Notas" value={form.notes} onChange={v=>setForm(p=>Object.assign({},p,{notes:v}))} placeholder="Motivo de consulta, instrucciones..."/>
+      <div style={{display:"flex",gap:10,marginTop:14}}>
+        <Btn onClick={saveAppt} disabled={saving||!form.doctor_id||!form.date} style={{fontSize:13,padding:"9px 18px"}}>{saving?"Guardando...":(editAppt?"Actualizar cita":"Crear cita")}</Btn>
+        <Btn variant="ghost" onClick={resetForm} style={{fontSize:13,padding:"9px 14px"}}>Cancelar</Btn>
+      </div>
+    </Card>}
+
+    {/* LISTA */}
     <Card>
-      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:13,color:"rgba(255,255,255,.4)"}}>{appts.length} citas en Supabase</div>
-      {appts.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas aun</div>}
-      {appts.map((a,i)=><div key={a.id} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 20px",borderBottom:i<appts.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
-        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{a.patient_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:1}}>{a.treatment} {a.appointment_date||""}</div></div>
-        <div style={{fontSize:16,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif"}}>{curr} {a.price}</div>
-        <Badge c={a.status==="confirmed"?"green":a.status==="pending"?"yellow":"red"}>{a.status==="confirmed"?"Confirmada":a.status==="pending"?"Pendiente":"Cancelada"}</Badge>
-      </div>)}
+      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{apiAppts.length} citas{todayOnly?" hoy":""}</span>
+        {loadingAppts&&<span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>Cargando...</span>}
+      </div>
+      {apiAppts.length===0&&!loadingAppts&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas{todayOnly?" para hoy":""}</div>}
+      {apiAppts.map((a,i)=>{
+        const st=STATUS_UI[a.status]||STATUS_UI.pending;
+        const pat=a.patients||{name:a.patient_name||"Paciente"};
+        const doc=a.doctors||{name:a.doctor_name||"—",color:"#3b82f6"};
+        const tx=a.treatments||{name:a.treatment||"—"};
+        const start=new Date(a.start_time);
+        const end=new Date(a.end_time);
+        const timeStr=start.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"})+" - "+end.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"});
+        const dateStr=start.toLocaleDateString("es",{day:"numeric",month:"short"});
+        const nexts=NEXT_STATUS[a.status]||[];
+        const hasAllergy=pat.allergies&&pat.allergies.length>0;
+        return<div key={a.id} style={{padding:"14px 20px",borderBottom:i<apiAppts.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            {/* Time column */}
+            <div style={{minWidth:90,textAlign:"center",padding:"8px 10px",background:"rgba(255,255,255,.04)",borderRadius:8}}>
+              <div style={{fontSize:13,fontWeight:700}}>{timeStr.split(" - ")[0]}</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>{dateStr}</div>
+            </div>
+            {/* Doctor dot */}
+            <div style={{width:8,height:8,borderRadius:"50%",background:doc.color||"#3b82f6",flexShrink:0}}/>
+            {/* Patient + treatment */}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:14,display:"flex",alignItems:"center",gap:8}}>
+                {pat.name}
+                {hasAllergy&&<span style={{fontSize:10,padding:"2px 6px",borderRadius:4,background:"rgba(239,68,68,.15)",color:"#f87171",fontWeight:700}}>⚠️ ALERGIA</span>}
+              </div>
+              <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:2}}>{tx.name} · {doc.name} · {a.duration_minutes||30} min</div>
+              {a.chief_complaint&&<div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:1,fontStyle:"italic"}}>{a.chief_complaint}</div>}
+            </div>
+            {/* Price */}
+            {a.price>0&&<div style={{fontSize:16,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",flexShrink:0}}>{curr} {a.price}</div>}
+            {/* Status badge */}
+            <span style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:700,background:st.c,color:st.t,flexShrink:0}}>{st.label}</span>
+            {/* Actions */}
+            <div style={{display:"flex",gap:5,flexShrink:0}}>
+              {nexts.includes("confirmed")&&<button onClick={()=>changeStatus(a.id,"confirmed")} style={{padding:"5px 10px",background:"rgba(59,130,246,.2)",border:"1px solid rgba(59,130,246,.3)",borderRadius:6,color:"#60a5fa",fontSize:11,cursor:"pointer"}}>Confirmar</button>}
+              {nexts.includes("checked_in")&&<button onClick={()=>changeStatus(a.id,"checked_in")} style={{padding:"5px 10px",background:"rgba(168,85,247,.2)",border:"1px solid rgba(168,85,247,.3)",borderRadius:6,color:"#c084fc",fontSize:11,cursor:"pointer"}}>Check-in</button>}
+              {nexts.includes("in_chair")&&<button onClick={()=>changeStatus(a.id,"in_chair")} style={{padding:"5px 10px",background:"rgba(249,115,22,.2)",border:"1px solid rgba(249,115,22,.3)",borderRadius:6,color:"#fb923c",fontSize:11,cursor:"pointer"}}>Iniciar</button>}
+              {nexts.includes("completed")&&<button onClick={()=>changeStatus(a.id,"completed")} style={{padding:"5px 10px",background:"rgba(34,197,94,.2)",border:"1px solid rgba(34,197,94,.3)",borderRadius:6,color:"#22c55e",fontSize:11,cursor:"pointer"}}>Completar</button>}
+              {nexts.includes("no_show")&&<button onClick={()=>changeStatus(a.id,"no_show")} style={{padding:"5px 9px",background:"rgba(100,116,139,.15)",border:"1px solid rgba(100,116,139,.3)",borderRadius:6,color:"#94a3b8",fontSize:11,cursor:"pointer"}}>No vino</button>}
+              {nexts.includes("cancelled")&&<button onClick={()=>{const r=prompt("Motivo de cancelación (opcional):");changeStatus(a.id,"cancelled",r||"");}} style={{padding:"5px 9px",background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",borderRadius:6,color:"#f87171",fontSize:11,cursor:"pointer"}}>Cancelar</button>}
+            </div>
+          </div>
+        </div>;
+      })}
     </Card>
   </div>;
 }
@@ -584,8 +786,8 @@ function TabSofia(){
   return<div className="animate-in">
     <div style={{display:"flex",gap:8,marginBottom:20,padding:"12px 16px",background:"rgba(255,255,255,.025)",borderRadius:12,border:"1px solid rgba(255,255,255,.07)",alignItems:"center",flexWrap:"wrap"}}>
       <span style={{fontSize:12,color:"rgba(255,255,255,.4)",marginRight:4}}>Modo:</span>
-      {[["reception","Recepcion"],["doctor","Dr. Copiloto"],["reports","Reportes"]].map(([m,label])=>
-        <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofia de "+clinic.name+".",doctor:"Buenos dias doctor.",reports:"Listo para darte metricas."}[m]}]);}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,"+bc+",#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",fontSize:13,fontWeight:sofiaMode===m?700:400,transition:"all .2s"}}>{label}</button>
+      {[["reception","Recepcion"],["copilot","Dr. Copiloto"],["ceo","CEO / Metricas"]].map(([m,label])=>
+        <button key={m} onClick={()=>{setSofiaMode(m);setChat([{role:"assistant",content:{reception:"Hola! Soy Sofia de "+clinic.name+". En que te ayudo?",copilot:"Buenos dias doctor. Soy tu copiloto. Tengo las citas de hoy y el directorio de pacientes.",ceo:"Hola! Puedo darte metricas de la clinica en tiempo real."}[m]}]);}} style={{padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",background:sofiaMode===m?"linear-gradient(135deg,"+bc+",#00d4ff)":"rgba(255,255,255,.06)",color:sofiaMode===m?"#fff":"rgba(255,255,255,.5)",fontSize:13,fontWeight:sofiaMode===m?700:400,transition:"all .2s"}}>{label}</button>
       )}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 380px",gap:20}}>
@@ -813,7 +1015,9 @@ function App(){
     const next=[...chat,{role:"user",content:text}];
     setChat(next);setChatIn("");setChatLoad(true);
     try{
-      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify({mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
       if(!r.ok)throw new Error("sofia-chat "+r.status);
       const data=await r.json();const reply=data.text||"...";
       setChat(p=>[...p,{role:"assistant",content:reply}]);
@@ -838,7 +1042,9 @@ function App(){
       stream.getTracks().forEach(t=>t.stop());setMicStatus("Transcribiendo...");setMic(false);
       const blob=new Blob(chunks,{type:mt});if(blob.size<1000){setMicStatus("Audio muy corto");setTimeout(()=>setMicStatus(""),3000);return;}
       try{
-        const r=await fetch("/api/sofia-voice?clinic_id="+clinic.id+"&mode="+sofiaMode,{method:"POST",headers:{"Content-Type":mt},body:blob});
+        const sess2=await sb.auth.getSession();
+        const jwt2=(sess2.data.session||{}).access_token||"";
+        const r=await fetch("/api/sofia-voice?mode="+sofiaMode,{method:"POST",headers:{"Content-Type":mt,Authorization:"Bearer "+jwt2},body:blob});
         if(!r.ok){setMicStatus("Error "+r.status);setTimeout(()=>setMicStatus(""),5000);return;}
         const data=await r.json();if(!data.transcript){setMicStatus("Sin voz");setTimeout(()=>setMicStatus(""),3000);return;}
         setMicStatus(data.transcript.substring(0,40));
