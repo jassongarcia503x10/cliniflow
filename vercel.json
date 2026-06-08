@@ -6,10 +6,11 @@
     "api/whatsapp-webhook.js":          { "maxDuration": 30 },
     "api/confirm-booking.js":           { "maxDuration": 15 },
     "api/send-reminders.js":            { "maxDuration": 30 },
-    "api/sofia-chat.js":                { "maxDuration": 20 },
-    "api/sofia-report.js":              { "maxDuration": 20 },
-    "api/sofia-vision.js":              { "maxDuration": 60 },
+    "api/sofia-chat.js":                { "maxDuration": 25 },
     "api/sofia-voice.js":               { "maxDuration": 30 },
-    "api/create-clinic-onboarding.js":  { "maxDuration": 15 }
+    "api/sofia-vision.js":              { "maxDuration": 60 },
+    "api/create-clinic-onboarding.js":  { "maxDuration": 15 },
+    "api/patients.js":                  { "maxDuration": 15 },
+    "api/appointments.js":              { "maxDuration": 20 }
   }
 }
