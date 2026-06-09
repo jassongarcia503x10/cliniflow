@@ -1,10 +1,10 @@
 // ============================================================
-// CLINIFLOW — api/appointments.js
-// GET   → list appointments (by date, doctor, patient)
-// POST  → create appointment (validates double-booking)
-// PATCH → update status / reschedule (validates overlap)
+// CLINIFLOW - api/appointments.js
+// GET   -> list appointments (by date, doctor, patient)
+// POST  -> create appointment (validates double-booking)
+// PATCH -> update status / reschedule (validates overlap)
 //
-// Security: JWT → clinic_users → clinic_id  (never from body)
+// Security: JWT -> clinic_users -> clinic_id  (never from body)
 // Double-booking: checked server-side, never trusted from frontend
 // ============================================================
 
@@ -17,7 +17,7 @@ const SB = {
   "Content-Type": "application/json",
 };
 
-// ── JWT → clinic_id (shared auth logic) ──────────────────────
+// -- JWT -> clinic_id (shared auth logic) ----------------------
 async function resolveClinic(authHeader) {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     throw Object.assign(new Error("Token requerido"), { status: 401 });
@@ -42,7 +42,7 @@ async function resolveClinic(authHeader) {
   return { user_id: user.id, clinic_id: cu[0].clinic_id, role: cu[0].role };
 }
 
-// ── DOUBLE-BOOKING CHECK ──────────────────────────────────────
+// -- DOUBLE-BOOKING CHECK --------------------------------------
 // Returns the conflicting appointment if any, null otherwise
 // Algorithm: [s1,e1) overlaps [s2,e2) iff s1 < e2 AND e1 > s2
 async function checkOverlap(clinic_id, doctor_id, start_time, end_time, exclude_id) {
@@ -62,7 +62,7 @@ async function checkOverlap(clinic_id, doctor_id, start_time, end_time, exclude_
   return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
-// ── LOG TIMELINE (fire-and-forget) ────────────────────────────
+// -- LOG TIMELINE (fire-and-forget) ----------------------------
 async function logTimeline(clinic_id, patient_id, event_type, description, ref_id, ref_table) {
   if (!patient_id) return;
   try {
@@ -75,12 +75,15 @@ async function logTimeline(clinic_id, patient_id, event_type, description, ref_i
   } catch (e) { /* non-blocking */ }
 }
 
-// ── MAIN HANDLER ─────────────────────────────────────────────
+// -- MAIN HANDLER ---------------------------------------------
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (!SB_URL || !SB_SERVICE_KEY) {
+    return res.status(500).json({ error: "SUPABASE_URL o SUPABASE_SERVICE_KEY no configurada" });
+  }
 
   let clinic_id, user_id, role;
   try {
@@ -89,7 +92,7 @@ module.exports = async function handler(req, res) {
     return res.status(e.status || 401).json({ error: e.message });
   }
 
-  // ── GET — list appointments ───────────────────────────────
+  // -- GET - list appointments -------------------------------
   if (req.method === "GET") {
     const q = req.query || {};
     let url = SB_URL + "/rest/v1/appointments"
@@ -109,7 +112,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json(Array.isArray(data) ? data : []);
   }
 
-  // ── POST — create appointment ────────────────────────────
+  // -- POST - create appointment ----------------------------
   if (req.method === "POST") {
     const {
       patient_id, doctor_id, treatment_id,
@@ -194,7 +197,7 @@ module.exports = async function handler(req, res) {
     return res.status(201).json(appt);
   }
 
-  // ── PATCH — update appointment ────────────────────────────
+  // -- PATCH - update appointment ----------------------------
   if (req.method === "PATCH") {
     const { id, status, start_time, end_time, notes, treatment_notes, price, paid, payment_method, cancelled_reason } = req.body || {};
 
@@ -225,7 +228,7 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    // Build patch — only include provided fields
+    // Build patch - only include provided fields
     const patch = {};
     const now = new Date().toISOString();
     const VALID_STATUSES = ['pending','confirmed','checked_in','in_chair','completed','cancelled','no_show'];
@@ -267,7 +270,7 @@ module.exports = async function handler(req, res) {
       const labels = {
         confirmed:"Cita confirmada", checked_in:"Paciente en clínica",
         in_chair:"Tratamiento iniciado", completed:"Tratamiento completado",
-        cancelled:"Cita cancelada"+(cancelled_reason?" — "+cancelled_reason:""),
+        cancelled:"Cita cancelada"+(cancelled_reason?" - "+cancelled_reason:""),
         no_show:"Paciente no se presentó",
       };
       if (labels[status]) {
