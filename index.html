@@ -41,9 +41,12 @@ select option{background:#1e293b;color:#fff}
 const SB_URL  = "https://auklwgsdybtusxncfglo.supabase.co";
 const SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1a2x3Z3NkeWJ0dXN4bmNmZ2xvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NzQzNzQsImV4cCI6MjA5MjU1MDM3NH0.ZTDJpbqB75S5LI_Ixr2BkP0PI8NazV51w0hXmY_fz9E";
 const sb = window.supabase.createClient(SB_URL, SB_ANON);
-const HDR = { apikey: SB_ANON, Authorization: "Bearer " + SB_ANON, "Content-Type": "application/json" };
-
 // lib/supabase.js — shared DB helpers (no created_at in inserts — DB sets DEFAULT)
+async function getHDR(){
+  const sess=await sb.auth.getSession();
+  const jwt=(sess.data.session||{}).access_token||SB_ANON;
+  return{apikey:SB_ANON,Authorization:"Bearer "+jwt,"Content-Type":"application/json"};
+}
 async function dbGet(table, opts) {
   opts = opts || {};
   let url = SB_URL + "/rest/v1/" + table + "?select=*";
@@ -51,7 +54,7 @@ async function dbGet(table, opts) {
   if (opts.neq)   Object.entries(opts.neq).forEach(([k,v]) => { url += "&" + k + "=neq." + encodeURIComponent(v); });
   if (opts.order) url += "&order=" + opts.order;
   if (opts.limit) url += "&limit=" + opts.limit;
-  const r = await fetch(url, { headers: HDR });
+  const r = await fetch(url, { headers:await getHDR() });
   if (!r.ok) throw new Error(r.status + ": " + await r.text());
   return r.json();
 }
@@ -62,7 +65,7 @@ async function dbPost(table, data) {
   delete clean.updated_at;
   const r = await fetch(SB_URL + "/rest/v1/" + table, {
     method: "POST",
-    headers: Object.assign({}, HDR, { Prefer: "return=representation" }),
+    headers: Object.assign({},await getHDR(),{ Prefer: "return=representation" }),
     body: JSON.stringify(clean),
   });
   if (!r.ok) throw new Error(r.status + ": " + await r.text());
@@ -73,7 +76,7 @@ async function dbPatch(table, data, eq) {
   Object.entries(eq).forEach(([k,v]) => { url += k + "=eq." + encodeURIComponent(v) + "&"; });
   const r = await fetch(url, {
     method: "PATCH",
-    headers: Object.assign({}, HDR, { Prefer: "return=representation" }),
+    headers: Object.assign({},await getHDR(),{ Prefer: "return=representation" }),
     body: JSON.stringify(data),
   });
   if (!r.ok) throw new Error(r.status + ": " + await r.text());
@@ -261,7 +264,7 @@ function TabDashboard(){
         <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontWeight:700,fontSize:14}}>Pacientes recientes</div>
         {activePats.slice(0,5).map((p,i)=><div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none",cursor:"pointer"}} onClick={()=>{setTab("pacientes");selectPatient(p);}}>
           <div style={{width:32,height:32,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,"+bc+")",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:12,flexShrink:0}}>{(p.name||"?").charAt(0).toUpperCase()}</div>
-          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"—"}</div></div>
+          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"-"}</div></div>
           {p.allergies&&p.allergies.length>0&&<Badge c="red">Alergia</Badge>}
         </div>)}
         {activePats.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin pacientes aun</div>}
@@ -270,7 +273,7 @@ function TabDashboard(){
         <div style={{padding:"14px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",fontWeight:700,fontSize:14}}>Doctores ({doctors.filter(d=>d.active!==false).length} activos)</div>
         {doctors.filter(d=>d.active!==false).slice(0,5).map((d,i)=><div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 20px",borderBottom:i<4?"1px solid rgba(255,255,255,.04)":"none"}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:d.color||"#3b82f6",flexShrink:0}}/>
-          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{d.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{d.specialty||"—"}</div></div>
+          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{d.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{d.specialty||"-"}</div></div>
           <span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>{(d.daily_capacity||d.slots_per_day||8)*5}/sem</span>
         </div>)}
         {doctors.length===0&&<div style={{padding:20,fontSize:13,color:"rgba(255,255,255,.3)"}}>Sin doctores</div>}
@@ -338,7 +341,7 @@ function TabPacientes(){
           {filtered.map((p,i)=><div key={p.id} onClick={()=>selectPatient(p)} style={{padding:"12px 14px",borderBottom:i<filtered.length-1?"1px solid rgba(255,255,255,.04)":"none",cursor:"pointer",background:selPatient&&selPatient.id===p.id?"rgba(59,130,246,.1)":"transparent"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div style={{width:30,height:30,borderRadius:"50%",background:"linear-gradient(135deg,#1e3a8a,"+bc+")",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:11,flexShrink:0}}>{(p.name||"?").charAt(0).toUpperCase()}</div>
-              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"—"}</div></div>
+              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)"}}>{p.phone||p.email||"-"}</div></div>
               {p.allergies&&p.allergies.length>0&&<div style={{width:6,height:6,borderRadius:"50%",background:"#ef4444"}}/>}
             </div>
           </div>)}
@@ -497,7 +500,7 @@ function TabCitas(){
     in_chair:   {c:"rgba(249,115,22,.15)", t:"#fb923c", label:"En silla"},
     completed:  {c:"rgba(34,197,94,.15)",  t:"#22c55e", label:"Completada"},
     cancelled:  {c:"rgba(239,68,68,.12)",  t:"#f87171", label:"Cancelada"},
-    no_show:    {c:"rgba(100,116,139,.15)",t:"#94a3b8", label:"No se presentó"},
+    no_show:    {c:"rgba(100,116,139,.15)",t:"#94a3b8", label:"No se presento"},
   };
   const NEXT_STATUS={
     pending:["confirmed","cancelled"],
@@ -582,8 +585,8 @@ function TabCitas(){
       {apiAppts.map((a,i)=>{
         const st=STATUS_UI[a.status]||STATUS_UI.pending;
         const pat=a.patients||{name:a.patient_name||"Paciente"};
-        const doc=a.doctors||{name:a.doctor_name||"—",color:"#3b82f6"};
-        const tx=a.treatments||{name:a.treatment||"—"};
+        const doc=a.doctors||{name:a.doctor_name||"-",color:"#3b82f6"};
+        const tx=a.treatments||{name:a.treatment||"-"};
         const start=new Date(a.start_time);
         const end=new Date(a.end_time);
         const timeStr=start.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"})+" - "+end.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"});
@@ -619,7 +622,7 @@ function TabCitas(){
               {nexts.includes("in_chair")&&<button onClick={()=>changeStatus(a.id,"in_chair")} style={{padding:"5px 10px",background:"rgba(249,115,22,.2)",border:"1px solid rgba(249,115,22,.3)",borderRadius:6,color:"#fb923c",fontSize:11,cursor:"pointer"}}>Iniciar</button>}
               {nexts.includes("completed")&&<button onClick={()=>changeStatus(a.id,"completed")} style={{padding:"5px 10px",background:"rgba(34,197,94,.2)",border:"1px solid rgba(34,197,94,.3)",borderRadius:6,color:"#22c55e",fontSize:11,cursor:"pointer"}}>Completar</button>}
               {nexts.includes("no_show")&&<button onClick={()=>changeStatus(a.id,"no_show")} style={{padding:"5px 9px",background:"rgba(100,116,139,.15)",border:"1px solid rgba(100,116,139,.3)",borderRadius:6,color:"#94a3b8",fontSize:11,cursor:"pointer"}}>No vino</button>}
-              {nexts.includes("cancelled")&&<button onClick={()=>{const r=prompt("Motivo de cancelación (opcional):");changeStatus(a.id,"cancelled",r||"");}} style={{padding:"5px 9px",background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",borderRadius:6,color:"#f87171",fontSize:11,cursor:"pointer"}}>Cancelar</button>}
+              {nexts.includes("cancelled")&&<button onClick={()=>{changeStatus(a.id,"cancelled","");}} style={{padding:"5px 9px",background:"rgba(239,68,68,.12)",border:"1px solid rgba(239,68,68,.2)",borderRadius:6,color:"#f87171",fontSize:11,cursor:"pointer"}}>Cancelar</button>}
             </div>
           </div>
         </div>;
@@ -640,7 +643,7 @@ function TabReservas(){
       {pending.map((b,i,arr)=><div key={b.id} style={{display:"flex",alignItems:"center",gap:14,padding:"16px 20px",borderBottom:i<arr.length-1?"1px solid rgba(255,255,255,.05)":"none"}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:700,fontSize:14,marginBottom:3}}>{b.patient_name||"Paciente"}</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:12,flexWrap:"wrap"}}><span>{b.treatment||"—"}</span><span>{b.requested_day||"—"}</span><span>{b.requested_time||"—"}</span>{b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>{b.patient_phone}</span>}</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.5)",display:"flex",gap:12,flexWrap:"wrap"}}><span>{b.treatment||"-"}</span><span>{b.requested_day||"-"}</span><span>{b.requested_time||"-"}</span>{b.patient_phone&&b.patient_phone!=="no proporcionado"&&<span>{b.patient_phone}</span>}</div>
         </div>
         <div style={{display:"flex",gap:8,flexShrink:0}}>
           <button onClick={()=>confirmBooking(b.id,"confirm")} disabled={confirmingId===b.id} style={{padding:"8px 14px",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",opacity:confirmingId===b.id?0.6:1}}>{confirmingId===b.id?"...":"Confirmar"}</button>
@@ -751,7 +754,7 @@ function TabPrecios(){
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12}}>
         <Inp label={"Precio ("+curr+")"} value={form.price} onChange={v=>setForm(p=>Object.assign({},p,{price:v}))} placeholder="80"/>
-        <Sel label="Tipo de precio" value={form.price_mode} onChange={v=>setForm(p=>Object.assign({},p,{price_mode:v}))} opts={[["exact","Precio fijo"],["from","Desde..."],["consult","Consultar"]]}/>
+        <Sel label="Tipo de precio" value={form.price_mode} onChange={v=>setForm(p=>Object.assign({},p,{price_mode:v}))} opts={[["exact","Precio fijo"],["from","Desde"],["consult","Consultar"]]}/>
         <Inp label="Duracion (min)" value={""+form.duration} onChange={v=>setForm(p=>Object.assign({},p,{duration:v}))} placeholder="45"/>
       </div>
       <div style={{display:"flex",gap:10}}>
@@ -767,7 +770,7 @@ function TabPrecios(){
       {treats.length===0&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Agrega tu primer tratamiento</div>}
       {treats.map((t,i)=><div key={t.id} style={{display:"flex",alignItems:"center",gap:14,padding:"13px 20px",borderBottom:i<treats.length-1?"1px solid rgba(255,255,255,.04)":"none",opacity:t.active===false?0.4:1}}>
         <span style={{fontSize:20}}>🦷</span>
-        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{t.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{(t.duration||30)+" min · "+(t.price_mode==="exact"?"Fijo":t.price_mode==="from"?"Desde":"Consultar")}</div></div>
+        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{t.name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{(t.duration||30)+" min - "+(t.price_mode==="exact"?"Fijo":t.price_mode==="from"?"Desde":"Consultar")}</div></div>
         <div style={{fontSize:18,fontWeight:800,color:"#22c55e",fontFamily:"'Syne',sans-serif",minWidth:80,textAlign:"right"}}>{t.price_mode==="consult"?"Consulta":curr+" "+t.price}</div>
         <div style={{display:"flex",gap:6,flexShrink:0}}>
           <button onClick={()=>{setEditTreat(t.id);setForm({name:t.name,price:t.price||"",price_mode:t.price_mode||"exact",duration:t.duration||30});}} style={{padding:"6px 10px",background:"rgba(59,130,246,.15)",border:"1px solid rgba(59,130,246,.25)",borderRadius:7,color:"#60a5fa",fontSize:12,cursor:"pointer"}}>Editar</button>
@@ -825,7 +828,7 @@ function TabSofia(){
           <div style={{padding:"11px 13px",borderTop:"1px solid rgba(255,255,255,.08)"}}>
             <div style={{display:"flex",gap:8}}>
               <input value={chatIn} onChange={e=>setChatIn(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")sendChat();}} placeholder={mic?"Grabando...":"Escribe o habla con Sofia..."} style={{flex:1,padding:"9px 12px",background:"rgba(255,255,255,.06)",border:"1px solid "+(mic?"rgba(34,197,94,.5)":"rgba(255,255,255,.12)"),borderRadius:8,color:"#fff",fontSize:12,outline:"none",fontFamily:"inherit"}}/>
-              <button onClick={toggleMic} className={mic?"mic-on":""} style={{width:40,height:40,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:mic?"#ef4444":"rgba(255,255,255,.1)",border:"2px solid "+(mic?"#ef4444":"rgba(255,255,255,.2)"),borderRadius:9,cursor:"pointer",fontSize:18}}>{mic?"⏹":"🎤"}</button>
+              <button onClick={toggleMic} className={mic?"mic-on":""} style={{width:40,height:40,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:mic?"#ef4444":"rgba(255,255,255,.1)",border:"2px solid "+(mic?"#ef4444":"rgba(255,255,255,.2)"),borderRadius:9,cursor:"pointer",fontSize:18}}>{mic?"Stop":"🎤"}</button>
               <button onClick={sendChat} disabled={chatLoad||!chatIn.trim()} style={{width:40,height:40,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,"+bc+",#00d4ff)",border:"none",borderRadius:8,color:"#fff",fontSize:16,cursor:"pointer",opacity:chatLoad||!chatIn.trim()?0.4:1}}>➤</button>
             </div>
           </div>
@@ -876,7 +879,7 @@ function TabConfig(){
         <Card style={{padding:22}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"#60a5fa"}}>Regional</div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            <Sel label="Moneda" value={form.currency} onChange={v=>setForm(p=>Object.assign({},p,{currency:v}))} opts={[["EUR","EUR — Euro"],["USD","USD — Dolar"],["GBP","GBP — Libra"],["DOP","DOP — Peso"],["CRC","CRC — Colon"],["HRK","HRK — Kuna"]]}/>
+            <Sel label="Moneda" value={form.currency} onChange={v=>setForm(p=>Object.assign({},p,{currency:v}))} opts={[["EUR","EUR - Euro"],["USD","USD - Dolar"],["GBP","GBP - Libra"],["DOP","DOP - Peso"],["CRC","CRC - Colon"],["HRK","HRK - Kuna"]]}/>
             <Sel label="Idioma de Sofia" value={form.language} onChange={v=>setForm(p=>Object.assign({},p,{language:v}))} opts={[["es","Espanol"],["en","English"],["hr","Hrvatski"],["de","Deutsch"],["fr","Francais"],["pt","Portugues"]]}/>
             <Sel label="Zona horaria" value={form.timezone} onChange={v=>setForm(p=>Object.assign({},p,{timezone:v}))} opts={[["Europe/Madrid","Madrid / Barcelona"],["Europe/Zagreb","Zagreb"],["America/El_Salvador","El Salvador"],["America/Santo_Domingo","Santo Domingo"],["America/New_York","Nueva York"],["Europe/London","Londres"]]}/>
           </div>
@@ -921,9 +924,9 @@ function Sidebar(){
     </div>
     <div style={{margin:"0 10px 12px",padding:"12px 14px",background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12}}>
       <div style={{fontSize:13,fontWeight:700}}>{clinic.name}</div>
-      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{clinic.city}{clinic.country?" · "+clinic.country:""}</div>
+      <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:2}}>{clinic.city}{clinic.country?" - "+clinic.country:""}</div>
       <div style={{marginTop:7,display:"flex",gap:5,flexWrap:"wrap"}}>
-        <Badge c="green">{"● "+(clinic.plan||"trial").toUpperCase()}</Badge>
+        <Badge c="green">{"* "+(clinic.plan||"trial").toUpperCase()}</Badge>
         <Badge c="blue">{curr}</Badge>
       </div>
     </div>
