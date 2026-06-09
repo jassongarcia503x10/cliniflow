@@ -1,7 +1,7 @@
 // ============================================================
-// CLINIFLOW — api/patients.js
+// CLINIFLOW - api/patients.js
 // Handles GET + POST + PATCH for patients
-// Uses service_role key — bypasses RLS entirely
+// Uses service_role key - bypasses RLS entirely
 // Auth: verifies JWT, resolves clinic_id from clinic_users
 // Never trusts clinic_id from frontend
 // ============================================================
@@ -32,7 +32,7 @@ async function resolveClinic(authHeader) {
   const user = await userRes.json();
   if (!user.id) throw Object.assign(new Error("Usuario no autenticado"), { status: 401 });
 
-  // 2. Get clinic_id from clinic_users (service key — no RLS)
+  // 2. Get clinic_id from clinic_users (service key - no RLS)
   const cuRes = await fetch(
     SB_URL + "/rest/v1/clinic_users?select=clinic_id&user_id=eq." + user.id + "&limit=1",
     { headers: SB }
@@ -50,6 +50,9 @@ module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (!SB_URL || !SB_SERVICE_KEY) {
+    return res.status(500).json({ error: "SUPABASE_URL o SUPABASE_SERVICE_KEY no configurada" });
+  }
 
   let clinic_id, user_id;
   try {
@@ -58,7 +61,7 @@ module.exports = async function handler(req, res) {
     return res.status(e.status || 401).json({ error: e.message });
   }
 
-  // ── GET — list patients for the clinic ─────────────────────
+  // -- GET - list patients for the clinic ---------------------
   if (req.method === "GET") {
     const r = await fetch(
       SB_URL + "/rest/v1/patients?select=*&clinic_id=eq." + clinic_id + "&order=name.asc",
@@ -68,7 +71,7 @@ module.exports = async function handler(req, res) {
     return res.status(200).json(Array.isArray(data) ? data : []);
   }
 
-  // ── POST — create new patient ───────────────────────────────
+  // -- POST - create new patient -------------------------------
   if (req.method === "POST") {
     const { name, phone, email, allergies, notes } = req.body || {};
     if (!name || !String(name).trim()) {
@@ -96,7 +99,7 @@ module.exports = async function handler(req, res) {
     return res.status(201).json(Array.isArray(data) ? data[0] : data);
   }
 
-  // ── PATCH — update existing patient ────────────────────────
+  // -- PATCH - update existing patient ------------------------
   if (req.method === "PATCH") {
     const { id, name, phone, email, allergies, notes, active } = req.body || {};
     if (!id) return res.status(400).json({ error: "id requerido" });
