@@ -1,10 +1,10 @@
 // ============================================================
-// CLINIFLOW — sofia-chat.js v3
-// Three modes — all powered by real Supabase data
+// CLINIFLOW - sofia-chat.js v3
+// Three modes - all powered by real Supabase data
 //
 // reception: public-facing, patient-only info, no PHI
-// copilot:   doctor internal — patients, today's appts, allergies
-// ceo:       owner — aggregated revenue, no-shows, conversions
+// copilot:   doctor internal - patients, today's appts, allergies
+// ceo:       owner - aggregated revenue, no-shows, conversions
 // ============================================================
 
 const CLAUDE_API_KEY       = process.env.CLAUDE_API_KEY;
@@ -22,7 +22,7 @@ async function sbGet(path) {
   return t ? JSON.parse(t) : [];
 }
 
-// ── RESOLVE JWT → clinic_id ──────────────────────────────────
+// -- RESOLVE JWT -> clinic_id ----------------------------------
 async function resolveClinic(authHeader) {
   if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
@@ -36,7 +36,7 @@ async function resolveClinic(authHeader) {
   return Array.isArray(cu) && cu.length > 0 ? cu[0].clinic_id : null;
 }
 
-// ── MODE: RECEPTION ──────────────────────────────────────────
+// -- MODE: RECEPTION ------------------------------------------
 async function receptionContext(clinic_id) {
   const [clinics, treats] = await Promise.all([
     sbGet("clinics?select=name,city,phone,hours_mon_fri,hours_saturday,language,currency&id=eq." + clinic_id + "&limit=1"),
@@ -75,7 +75,7 @@ INSTRUCCIONES:
   };
 }
 
-// ── MODE: COPILOT (doctor) ───────────────────────────────────
+// -- MODE: COPILOT (doctor) -----------------------------------
 async function copilotContext(clinic_id) {
   const now = new Date();
   const todayStart = now.toISOString().slice(0, 10) + "T00:00:00";
@@ -90,10 +90,10 @@ async function copilotContext(clinic_id) {
   const apptLines = Array.isArray(appts) ? appts.map(a => {
     const t = new Date(a.start_time).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
     const pat = a.patients ? a.patients.name : "Desconocido";
-    const tx  = a.treatments ? a.treatments.name : "—";
+    const tx  = a.treatments ? a.treatments.name : "-";
     const alg = a.patients && a.patients.allergies && a.patients.allergies.length > 0
       ? " ⚠️ ALERGIA: " + a.patients.allergies.join(", ") : "";
-    return t + " — " + pat + " — " + tx + " [" + a.status + "]" + alg;
+    return t + " - " + pat + " - " + tx + " [" + a.status + "]" + alg;
   }).join("\n") : "Sin citas programadas";
 
   const patientList = Array.isArray(patients) ? patients.map(p => {
@@ -108,7 +108,7 @@ async function copilotContext(clinic_id) {
     : [];
   const next = upcoming[0];
   const nextLine = next
-    ? (next.patients ? next.patients.name : "—") + " a las " +
+    ? (next.patients ? next.patients.name : "-") + " a las " +
       new Date(next.start_time).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })
     : "No hay más citas hoy";
 
@@ -135,7 +135,7 @@ INSTRUCCIONES:
   };
 }
 
-// ── MODE: CEO (owner metrics) ────────────────────────────────
+// -- MODE: CEO (owner metrics) --------------------------------
 async function ceoContext(clinic_id) {
   const now       = new Date();
   const todayStr  = now.toISOString().slice(0, 10);
@@ -197,12 +197,18 @@ REGLAS:
   };
 }
 
-// ── MAIN HANDLER ─────────────────────────────────────────────
+// -- MAIN HANDLER ---------------------------------------------
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (!SB_URL || !SB_SERVICE_KEY) {
+    return res.status(500).json({ error: "SUPABASE_URL o SUPABASE_SERVICE_KEY no configurada" });
+  }
+  if (!CLAUDE_API_KEY) {
+    return res.status(500).json({ error: "CLAUDE_API_KEY no configurada" });
+  }
   if (req.method !== "POST")   return res.status(405).json({ error: "Method not allowed" });
 
   const { messages, clinic_id: client_clinic_id, mode } = req.body || {};
