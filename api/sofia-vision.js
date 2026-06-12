@@ -7,6 +7,7 @@
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const { requireClinicUser } = require("../lib/auth");
 
 const HDR = {
   apikey: SUPABASE_SERVICE_KEY,
@@ -60,14 +61,20 @@ async function saveAnalysis(data) {
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { image_base64, image_type, media_type, clinic_id, patient_name, patient_phone } = req.body || {};
+  const { image_base64, image_type, media_type, patient_name, patient_phone } = req.body || {};
 
   if (!image_base64) return res.status(400).json({ error: "image_base64 requerido" });
-  if (!clinic_id)    return res.status(400).json({ error: "clinic_id requerido" });
+
+  let clinic_id;
+  try {
+    clinic_id = (await requireClinicUser(req.headers.authorization)).clinic_id;
+  } catch (e) {
+    return res.status(e.status || 401).json({ error: e.message });
+  }
 
   const mediaType = media_type || "image/jpeg";
 

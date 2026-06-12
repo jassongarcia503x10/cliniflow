@@ -7,6 +7,7 @@
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const DIALOG360_API_KEY = process.env.DIALOG360_API_KEY;
+const { requireClinicUser } = require("../lib/auth");
 
 const HDR = {
   apikey: SUPABASE_SERVICE_KEY,
@@ -207,7 +208,7 @@ async function sendWhatsApp(to, body) {
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -216,8 +217,13 @@ module.exports = async function handler(req, res) {
   if (!["confirm","reject","reschedule"].includes(action)) return res.status(400).json({ error: "action invalido" });
 
   try {
+    const auth = await requireClinicUser(req.headers.authorization);
+
     // 1. Leer la reserva
-    const bookings = await sbGet("pending_bookings?select=*&id=eq." + booking_id + "&limit=1");
+    const bookings = await sbGet(
+      "pending_bookings?select=*&id=eq." + encodeURIComponent(booking_id) +
+      "&clinic_id=eq." + encodeURIComponent(auth.clinic_id) + "&limit=1"
+    );
     if (!Array.isArray(bookings) || bookings.length === 0) return res.status(404).json({ error: "Reserva no encontrada" });
     const booking = bookings[0];
     if (booking.status !== "pending") return res.status(400).json({ error: "Reserva ya procesada: " + booking.status });
@@ -229,7 +235,7 @@ module.exports = async function handler(req, res) {
     const clinicPhone = clinic ? (clinic.phone || "") : "";
 
     const now = new Date().toISOString();
-    const by  = confirmed_by || "recepcion";
+    const by  = auth.email || confirmed_by || "recepcion";
     let appointmentId = null;
     let patientMessage = "";
     let whatsappSent = false;
@@ -302,6 +308,6 @@ module.exports = async function handler(req, res) {
 
   } catch (error) {
     console.error("confirm-booking error:", error.message);
-    return res.status(500).json({ error: "Error interno", detail: error.message });
+    return res.status(error.status || 500).json({ error: error.status ? error.message : "Error interno", detail: error.message });
   }
 };

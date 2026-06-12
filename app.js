@@ -758,7 +758,8 @@ function App(){
   async function confirmBooking(bookingId,action){
     setConfirmingId(bookingId);
     try{
-      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
+      const sess=await sb.auth.getSession();const jwt=(sess.data.session||{}).access_token||"";
+      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
       const data=await r.json();
       if(data.success){boom({confirm:"Cita confirmada",reject:"Rechazada",reschedule:"Reagendada"}[action]||"OK");await loadAll();}
       else boom("Error: "+(data.error||"intenta de nuevo"));
@@ -770,7 +771,8 @@ function App(){
     const next=[...chat,{role:"user",content:text}];
     setChat(next);setChatIn("");setChatLoad(true);
     try{
-      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({clinic_id:clinic.id,mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
+      const sess=await sb.auth.getSession();const jwt=(sess.data.session||{}).access_token||"";
+      const r=await fetch("/api/sofia-chat",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify({mode:sofiaMode,messages:next.slice(-8).map(m=>({role:m.role,content:m.content}))})});
       if(!r.ok)throw new Error("sofia-chat "+r.status);
       const data=await r.json();const reply=data.text||"...";
       setChat(p=>[...p,{role:"assistant",content:reply}]);
@@ -795,7 +797,8 @@ function App(){
       stream.getTracks().forEach(t=>t.stop());setMicStatus("Transcribiendo...");setMic(false);
       const blob=new Blob(chunks,{type:mt});if(blob.size<1000){setMicStatus("Audio muy corto");setTimeout(()=>setMicStatus(""),3000);return;}
       try{
-        const r=await fetch("/api/sofia-voice?clinic_id="+clinic.id+"&mode="+sofiaMode,{method:"POST",headers:{"Content-Type":mt},body:blob});
+        const sess2=await sb.auth.getSession();const jwt2=(sess2.data.session||{}).access_token||"";
+        const r=await fetch("/api/sofia-voice?mode="+sofiaMode,{method:"POST",headers:{"Content-Type":mt,Authorization:"Bearer "+jwt2},body:blob});
         if(!r.ok){setMicStatus("Error "+r.status);setTimeout(()=>setMicStatus(""),5000);return;}
         const data=await r.json();if(!data.transcript){setMicStatus("Sin voz");setTimeout(()=>setMicStatus(""),3000);return;}
         setMicStatus(data.transcript.substring(0,40));

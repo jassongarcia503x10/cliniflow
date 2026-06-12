@@ -92,7 +92,10 @@ module.exports = async function handler(req, res) {
   // Seguridad: solo Vercel Cron o clave secreta
   const authHeader = req.headers.authorization;
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== "Bearer " + cronSecret) {
+  if (!cronSecret) {
+    return res.status(503).json({ error: "CRON_SECRET no configurado" });
+  }
+  if (authHeader !== "Bearer " + cronSecret) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 

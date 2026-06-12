@@ -1006,7 +1006,8 @@ function App(){
   async function confirmBooking(bookingId,action){
     setConfirmingId(bookingId);
     try{
-      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
+      const sess=await sb.auth.getSession();const jwt=(sess.data.session||{}).access_token||"";
+      const r=await fetch("/api/confirm-booking",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+jwt},body:JSON.stringify({booking_id:bookingId,action,confirmed_by:clinic.name})});
       const data=await r.json();
       if(data.success){boom({confirm:"Cita confirmada",reject:"Rechazada",reschedule:"Reagendada"}[action]||"OK");await loadAll();}
       else boom("Error: "+(data.error||"intenta de nuevo"));

@@ -12,6 +12,7 @@
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const { requireClinicUser } = require("../lib/auth");
 
 const HDR = {
   apikey: SUPABASE_SERVICE_KEY,
@@ -83,12 +84,19 @@ async function getClinicSnapshot(clinicId) {
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { question, clinic_id } = req.body || {};
-  if (!question || !clinic_id) return res.status(400).json({ error: "question y clinic_id requeridos" });
+  const { question } = req.body || {};
+  if (!question) return res.status(400).json({ error: "question requerida" });
+
+  let clinic_id;
+  try {
+    clinic_id = (await requireClinicUser(req.headers.authorization, ["owner", "admin"])).clinic_id;
+  } catch (e) {
+    return res.status(e.status || 401).json({ error: e.message });
+  }
 
   try {
     // 1. Obtener snapshot real de la clínica

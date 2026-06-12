@@ -12,6 +12,11 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const DIALOG360_API_KEY = process.env.DIALOG360_API_KEY;
 const CEO_PHONE = process.env.CEO_PHONE;
+const WHATSAPP_WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET;
+const WHATSAPP_CLINIC_ID = process.env.WHATSAPP_CLINIC_ID;
+const WHATSAPP_BASIC_AUTH_USER = process.env.WHATSAPP_BASIC_AUTH_USER;
+const WHATSAPP_BASIC_AUTH_PASSWORD = process.env.WHATSAPP_BASIC_AUTH_PASSWORD;
+const crypto = require('crypto');
 
 const processedMessages = new Set();
 
@@ -332,8 +337,61 @@ async function upsertContext(clinicId, phone, updates) {
   }
 }
 
+function webhookAuthConfigured() {
+  return Boolean(
+    WHATSAPP_CLINIC_ID &&
+    (
+      WHATSAPP_WEBHOOK_SECRET ||
+      (WHATSAPP_BASIC_AUTH_USER && WHATSAPP_BASIC_AUTH_PASSWORD)
+    )
+  );
+}
+
+function webhookAuthMatches(req) {
+  const headerSecret = req.headers['x-webhook-secret'];
+  const authHeader = req.headers.authorization || '';
+  const bearerSecret = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const querySecret = req.query?.secret;
+  return basicAuthMatches(authHeader) ||
+    secretMatches(headerSecret) ||
+    secretMatches(bearerSecret) ||
+    secretMatches(querySecret);
+}
+
+function secretMatches(candidate) {
+  if (!WHATSAPP_WEBHOOK_SECRET || typeof candidate !== 'string') return false;
+  const expected = Buffer.from(WHATSAPP_WEBHOOK_SECRET);
+  const received = Buffer.from(candidate);
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
+function basicAuthMatches(authHeader) {
+  if (!WHATSAPP_BASIC_AUTH_USER || !WHATSAPP_BASIC_AUTH_PASSWORD) return false;
+  if (typeof authHeader !== 'string' || !authHeader.startsWith('Basic ')) return false;
+  try {
+    const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (separator < 0) return false;
+    const user = decoded.slice(0, separator);
+    const password = decoded.slice(separator + 1);
+    return constantTimeMatches(user, WHATSAPP_BASIC_AUTH_USER) &&
+      constantTimeMatches(password, WHATSAPP_BASIC_AUTH_PASSWORD);
+  } catch (e) {
+    return false;
+  }
+}
+
+function constantTimeMatches(candidate, expectedValue) {
+  const expected = Buffer.from(expectedValue);
+  const received = Buffer.from(candidate);
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
 async function getClinic() {
-  const data = await sbGet('clinics?select=*&active=eq.true&limit=1');
+  if (!WHATSAPP_CLINIC_ID) return null;
+  const data = await sbGet(
+    'clinics?select=*&id=eq.' + encodeURIComponent(WHATSAPP_CLINIC_ID) + '&active=eq.true&limit=1'
+  );
   return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
@@ -480,11 +538,20 @@ module.exports = async function handler(req, res) {
 
   if (req.method === 'GET') {
     const challenge = req.query['hub.challenge'];
-    if (challenge) return res.status(200).send(challenge);
-    return res.status(200).send('Webhook OK');
+    const verifyToken = req.query['hub.verify_token'];
+    if (challenge && (webhookAuthMatches(req) || secretMatches(verifyToken))) {
+      return res.status(200).send(challenge);
+    }
+    return res.status(403).send('Forbidden');
   }
 
   if (req.method !== 'POST') return res.status(405).send('Method not allowed');
+  if (!webhookAuthConfigured()) {
+    return res.status(503).json({ error: 'Webhook security not configured' });
+  }
+  if (!webhookAuthMatches(req)) {
+    return res.status(401).json({ error: 'Invalid webhook authentication' });
+  }
 
   try {
     const body = req.body;

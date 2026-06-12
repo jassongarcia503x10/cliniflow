@@ -8,22 +8,7 @@
 
 const GROQ_API_KEY    = process.env.GROQ_API_KEY;
 const SB_SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
-
-async function resolveClinicFromJWT(authHeader) {
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-  const ur = await fetch(SUPABASE_URL + "/auth/v1/user", {
-    headers: { apikey: SB_SERVICE_KEY, Authorization: "Bearer " + token },
-  });
-  if (!ur.ok) return null;
-  const user = await ur.json();
-  if (!user.id) return null;
-  const cu = await fetch(SUPABASE_URL + "/rest/v1/clinic_users?select=clinic_id&user_id=eq." + user.id + "&limit=1", {
-    headers: { apikey: SB_SERVICE_KEY, Authorization: "Bearer " + SB_SERVICE_KEY },
-  });
-  const cuData = await cu.json();
-  return Array.isArray(cuData) && cuData.length > 0 ? cuData[0].clinic_id : null;
-}
+const { requireClinicUser } = require("../lib/auth");
 const SUPABASE_URL    = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CLAUDE_API_KEY  = process.env.CLAUDE_API_KEY;
@@ -120,9 +105,12 @@ module.exports = async function handler(req, res) {
   const contentType = req.headers["content-type"] || "";
 
   let audioBuffer;
-  // Resolve clinic from JWT (never trust query param)
-  let clinicId = await resolveClinicFromJWT(req.headers.authorization);
-  if (!clinicId) clinicId = req.query.clinic_id || null; // fallback for legacy calls
+  let clinicId;
+  try {
+    clinicId = (await requireClinicUser(req.headers.authorization)).clinic_id;
+  } catch (e) {
+    return res.status(e.status || 401).json({ error: e.message });
+  }
   let mode     = req.query.mode || "reception";
 
   // El frontend envía el audio como raw binary con query params
