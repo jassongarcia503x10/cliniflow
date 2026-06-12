@@ -17,6 +17,24 @@ const SB = {
   "Content-Type": "application/json",
 };
 
+function returnSupabaseError(res, response, data, operation) {
+  const details = data && typeof data === "object" ? data : {};
+  const message = details.message || (typeof data === "string" ? data : "Error de base de datos");
+
+  console.error("[appointments] Supabase " + operation + " failed", {
+    status:  response.status,
+    code:    details.code,
+    message,
+    details: details.details,
+    hint:    details.hint,
+  });
+
+  return res.status(response.status).json({
+    error: message,
+    code:  details.code || undefined,
+  });
+}
+
 // -- JWT -> clinic_id (shared auth logic) ----------------------
 async function resolveClinic(authHeader) {
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -182,7 +200,7 @@ module.exports = async function handler(req, res) {
       body:    JSON.stringify(payload),
     });
     const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data });
+    if (!r.ok) return returnSupabaseError(res, r, data, "appointment create");
 
     const appt = Array.isArray(data) ? data[0] : data;
 
@@ -261,7 +279,7 @@ module.exports = async function handler(req, res) {
       }
     );
     const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data });
+    if (!r.ok) return returnSupabaseError(res, r, data, "appointment update");
 
     const appt = Array.isArray(data) ? data[0] : data;
 
