@@ -10,6 +10,7 @@
 const CLAUDE_API_KEY       = process.env.CLAUDE_API_KEY;
 const SB_URL               = process.env.SUPABASE_URL;
 const SB_SERVICE_KEY       = process.env.SUPABASE_SERVICE_KEY;
+const { requireClinicUser } = require("../lib/auth");
 
 const SB = {
   apikey: SB_SERVICE_KEY,
@@ -20,20 +21,6 @@ async function sbGet(path) {
   const r = await fetch(SB_URL + "/rest/v1/" + path, { headers: SB });
   const t = await r.text();
   return t ? JSON.parse(t) : [];
-}
-
-// -- RESOLVE JWT -> clinic_id ----------------------------------
-async function resolveClinic(authHeader) {
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-  const ur = await fetch(SB_URL + "/auth/v1/user", {
-    headers: { apikey: SB_SERVICE_KEY, Authorization: "Bearer " + token },
-  });
-  if (!ur.ok) return null;
-  const user = await ur.json();
-  if (!user.id) return null;
-  const cu = await sbGet("clinic_users?select=clinic_id&user_id=eq." + user.id + "&limit=1");
-  return Array.isArray(cu) && cu.length > 0 ? cu[0].clinic_id : null;
 }
 
 // -- MODE: RECEPTION ------------------------------------------
@@ -216,12 +203,27 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "messages array requerido" });
   }
 
-  // Try to resolve clinic from JWT; fall back to client-provided id (reception mode only)
-  let clinic_id = await resolveClinic(req.headers.authorization);
-  if (!clinic_id) clinic_id = client_clinic_id; // for unauthenticated reception use
-  if (!clinic_id) return res.status(400).json({ error: "clinic_id requerido" });
-
   const activeMode = mode || "reception";
+  if (!["reception", "copilot", "ceo"].includes(activeMode)) {
+    return res.status(400).json({ error: "mode invalido" });
+  }
+
+  let clinic_id;
+  if (activeMode === "reception") {
+    try {
+      clinic_id = (await requireClinicUser(req.headers.authorization)).clinic_id;
+    } catch (e) {
+      clinic_id = client_clinic_id;
+    }
+    if (!clinic_id) return res.status(400).json({ error: "clinic_id requerido" });
+  } else {
+    try {
+      const allowedRoles = activeMode === "ceo" ? ["owner", "admin"] : undefined;
+      clinic_id = (await requireClinicUser(req.headers.authorization, allowedRoles)).clinic_id;
+    } catch (e) {
+      return res.status(e.status || 401).json({ error: e.message });
+    }
+  }
 
   let ctx;
   try {
