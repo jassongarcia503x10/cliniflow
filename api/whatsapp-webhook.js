@@ -197,7 +197,6 @@ function buildSystemPrompt(clinic, lang, treatments, settings, bookingData) {
     ? `\nYA CONFIRMADO (NO volver a pedir): ${confirmed.join(', ')}`
     : '';
 
-  const state = getBookingState(bookingData);
   const missing = [];
   if (!bookingData.treatment) missing.push('tratamiento');
   if (!bookingData.day)       missing.push('día');

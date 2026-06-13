@@ -231,9 +231,7 @@ module.exports = async function handler(req, res) {
       chief_complaint:     chief_complaint || null,
       notes:               notes || null,
       // When treatment_id is provided, use the DB price — never the frontend value.
-      price:               verifiedTreatment
-                             ? (parseFloat(verifiedTreatment.price) || 0)
-                             : (price != null ? parseFloat(price) : 0),
+      price:               verifiedTreatment ? (parseFloat(verifiedTreatment.price) || 0) : 0,
       source:              source || "manual",
       pending_booking_id:  pending_booking_id || null,
       created_by:          user_id,
