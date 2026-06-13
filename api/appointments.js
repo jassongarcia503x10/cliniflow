@@ -127,6 +127,7 @@ module.exports = async function handler(req, res) {
 
     const r = await fetch(url, { headers: SB });
     const data = await r.json();
+    if (!r.ok) return returnSupabaseError(res, r, data, "appointment list");
     return res.status(200).json(Array.isArray(data) ? data : []);
   }
 
@@ -135,7 +136,7 @@ module.exports = async function handler(req, res) {
     const {
       patient_id, doctor_id, treatment_id,
       start_time, end_time, duration_minutes,
-      chief_complaint, notes, price, source,
+      chief_complaint, notes, source,
       pending_booking_id,
     } = req.body || {};
 
@@ -151,15 +152,13 @@ module.exports = async function handler(req, res) {
     }
 
     // Verify doctor belongs to this clinic
-    if (doctor_id) {
-      const docCheck = await fetch(
-        SB_URL + "/rest/v1/doctors?id=eq." + doctor_id + "&clinic_id=eq." + clinic_id + "&limit=1",
-        { headers: SB }
-      );
-      const doc = await docCheck.json();
-      if (!Array.isArray(doc) || doc.length === 0) {
-        return res.status(403).json({ error: "Doctor no pertenece a esta clínica" });
-      }
+    const docCheck = await fetch(
+      SB_URL + "/rest/v1/doctors?id=eq." + doctor_id + "&clinic_id=eq." + clinic_id + "&limit=1",
+      { headers: SB }
+    );
+    const doc = await docCheck.json();
+    if (!Array.isArray(doc) || doc.length === 0) {
+      return res.status(403).json({ error: "Doctor no pertenece a esta clínica" });
     }
 
     // Verify patient belongs to this clinic
@@ -309,7 +308,7 @@ module.exports = async function handler(req, res) {
       Math.round((new Date(end_time) - new Date(start_time)) / 60000);
     if (notes            !== undefined) patch.notes             = notes;
     if (treatment_notes  !== undefined) patch.treatment_notes   = treatment_notes;
-    if (price            !== undefined) patch.price             = parseFloat(price);
+    if (price            !== undefined && (role === 'owner' || role === 'admin')) patch.price = parseFloat(price);
     if (paid             !== undefined) patch.paid              = Boolean(paid);
     if (payment_method   !== undefined) patch.payment_method    = payment_method;
     if (cancelled_reason !== undefined) patch.cancelled_reason  = cancelled_reason;
