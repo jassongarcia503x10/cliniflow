@@ -127,6 +127,7 @@ module.exports = async function handler(req, res) {
 
     const r = await fetch(url, { headers: SB });
     const data = await r.json();
+    if (!r.ok) return returnSupabaseError(res, r, data, "appointment list");
     return res.status(200).json(Array.isArray(data) ? data : []);
   }
 
@@ -135,7 +136,7 @@ module.exports = async function handler(req, res) {
     const {
       patient_id, doctor_id, treatment_id,
       start_time, end_time, duration_minutes,
-      chief_complaint, notes, price, source,
+      chief_complaint, notes, source,
       pending_booking_id,
     } = req.body || {};
 
@@ -151,14 +152,55 @@ module.exports = async function handler(req, res) {
     }
 
     // Verify doctor belongs to this clinic
-    if (doctor_id) {
-      const docCheck = await fetch(
-        SB_URL + "/rest/v1/doctors?id=eq." + doctor_id + "&clinic_id=eq." + clinic_id + "&limit=1",
+    const docCheck = await fetch(
+      SB_URL + "/rest/v1/doctors?id=eq." + doctor_id + "&clinic_id=eq." + clinic_id + "&limit=1",
+      { headers: SB }
+    );
+    const doc = await docCheck.json();
+    if (!Array.isArray(doc) || doc.length === 0) {
+      return res.status(403).json({ error: "Doctor no pertenece a esta clínica" });
+    }
+
+    // Verify patient belongs to this clinic
+    if (patient_id) {
+      const patCheck = await fetch(
+        SB_URL + "/rest/v1/patients?id=eq." + patient_id +
+        "&clinic_id=eq." + clinic_id + "&select=id&limit=1",
         { headers: SB }
       );
-      const doc = await docCheck.json();
-      if (!Array.isArray(doc) || doc.length === 0) {
-        return res.status(403).json({ error: "Doctor no pertenece a esta clínica" });
+      const pat = await patCheck.json();
+      if (!Array.isArray(pat) || pat.length === 0) {
+        return res.status(403).json({ error: "Paciente no pertenece a esta clínica" });
+      }
+    }
+
+    // Verify treatment belongs to this clinic and is active.
+    // Use DB price — never trust the price submitted by the frontend.
+    let verifiedTreatment = null;
+    if (treatment_id) {
+      const txCheck = await fetch(
+        SB_URL + "/rest/v1/treatments?id=eq." + treatment_id +
+        "&clinic_id=eq." + clinic_id +
+        "&active=eq.true&select=id,price,duration_minutes&limit=1",
+        { headers: SB }
+      );
+      const tx = await txCheck.json();
+      if (!Array.isArray(tx) || tx.length === 0) {
+        return res.status(403).json({ error: "Tratamiento no disponible en esta clínica" });
+      }
+      verifiedTreatment = tx[0];
+    }
+
+    // Verify pending_booking belongs to this clinic
+    if (pending_booking_id) {
+      const pbCheck = await fetch(
+        SB_URL + "/rest/v1/pending_bookings?id=eq." + pending_booking_id +
+        "&clinic_id=eq." + clinic_id + "&select=id&limit=1",
+        { headers: SB }
+      );
+      const pb = await pbCheck.json();
+      if (!Array.isArray(pb) || pb.length === 0) {
+        return res.status(403).json({ error: "Reserva no encontrada en esta clínica" });
       }
     }
 
@@ -187,7 +229,8 @@ module.exports = async function handler(req, res) {
       status:              "confirmed",
       chief_complaint:     chief_complaint || null,
       notes:               notes || null,
-      price:               price != null ? parseFloat(price) : 0,
+      // When treatment_id is provided, use the DB price — never the frontend value.
+      price:               verifiedTreatment ? (parseFloat(verifiedTreatment.price) || 0) : 0,
       source:              source || "manual",
       pending_booking_id:  pending_booking_id || null,
       created_by:          user_id,
@@ -265,7 +308,7 @@ module.exports = async function handler(req, res) {
       Math.round((new Date(end_time) - new Date(start_time)) / 60000);
     if (notes            !== undefined) patch.notes             = notes;
     if (treatment_notes  !== undefined) patch.treatment_notes   = treatment_notes;
-    if (price            !== undefined) patch.price             = parseFloat(price);
+    if (price            !== undefined && (role === 'owner' || role === 'admin')) patch.price = parseFloat(price);
     if (paid             !== undefined) patch.paid              = Boolean(paid);
     if (payment_method   !== undefined) patch.payment_method    = payment_method;
     if (cancelled_reason !== undefined) patch.cancelled_reason  = cancelled_reason;

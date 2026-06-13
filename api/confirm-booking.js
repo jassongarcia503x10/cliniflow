@@ -169,6 +169,7 @@ async function findPrice(clinicId, treatmentName) {
         clinicId +
         "&name=ilike." +
         encodeURIComponent("%" + term + "%") +
+        "&active=eq.true" +
         "&limit=1"
       );
       if (Array.isArray(rows) && rows.length > 0) {
