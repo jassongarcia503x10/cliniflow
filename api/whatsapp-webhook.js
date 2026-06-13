@@ -204,11 +204,19 @@ function buildSystemPrompt(clinic, lang, treatments, settings, bookingData) {
   if (!bookingData.time)      missing.push('hora');
   if (!bookingData.name)      missing.push('nombre completo');
 
-  const nextAsk = missing.length > 0
-    ? `SOLO PREGUNTA LO SIGUIENTE (una cosa a la vez): ${missing[0]}`
-    : canBook
-      ? `CONFIRMA LA CITA. Di: "${bookingMode === 'automatic' ? 'Cita confirmada para [datos].' : 'Solicitud registrada. El equipo te confirma por aquí.'}" y pregunta si necesita algo más.`
-      : 'Pide que escriba RECEPCION para confirmar.';
+  // If the patient mentioned a treatment this clinic does not offer, ask for
+  // clarification before advancing the booking state. Never invent services.
+  let nextAsk;
+  if (bookingData.unverified_treatment) {
+    const available = treatments.filter(t => t.active !== false).map(t => t.name).join(', ');
+    nextAsk = `ACLARACIÓN REQUERIDA: El paciente mencionó "${bookingData.unverified_treatment}" pero ese servicio NO está en tu lista. NO confirmes ese tratamiento ni inventes precios. Pregunta: "¿A cuál de nuestros servicios te refieres?" y lista los disponibles: ${available || 'ver servicios arriba'}.`;
+  } else {
+    nextAsk = missing.length > 0
+      ? `SOLO PREGUNTA LO SIGUIENTE (una cosa a la vez): ${missing[0]}`
+      : canBook
+        ? `CONFIRMA LA CITA. Di: "${bookingMode === 'automatic' ? 'Cita confirmada para [datos].' : 'Solicitud registrada. El equipo te confirma por aquí.'}" y pregunta si necesita algo más.`
+        : 'Pide que escriba RECEPCION para confirmar.';
+  }
 
   return `Eres Sofia, recepcionista IA de ${clinic.name}.
 ROL: Recepcionista dental profesional. Eficiente. Amable. Cierra citas.
@@ -397,9 +405,21 @@ async function getClinic() {
 
 async function getTreatments(clinicId) {
   try {
-    const d = await sbGet(`treatments?select=*&clinic_id=eq.${clinicId}&order=name.asc`);
+    const d = await sbGet(`treatments?select=*&clinic_id=eq.${clinicId}&active=eq.true&order=name.asc`);
     return Array.isArray(d) ? d : [];
   } catch (e) { return []; }
+}
+
+// Returns the matching active clinic treatment for a detected name, or null.
+// Stage 1 (regex in extractBookingData) detects intent; this is Stage 2 —
+// confirming the clinic actually offers the service before booking proceeds.
+function matchClinicTreatment(detected, clinicTreatments) {
+  if (!detected || !clinicTreatments || clinicTreatments.length === 0) return null;
+  const needle = detected.toLowerCase();
+  return clinicTreatments.find(t =>
+    t.name.toLowerCase().includes(needle) ||
+    needle.includes(t.name.toLowerCase())
+  ) || null;
 }
 
 async function getSettings(clinicId) {
@@ -622,6 +642,19 @@ module.exports = async function handler(req, res) {
     const bookingData = extractBookingData(message, prevData);
     if (!bookingData.name && contactName) bookingData.name = contactName;
     if (!bookingData.name) bookingData.name = extractName(message);
+
+    // Stage 2 treatment validation: only accept treatments this clinic offers.
+    // extractBookingData detects intent via regex (Stage 1); here we confirm the
+    // clinic actually offers the service before the booking state advances.
+    if (bookingData.treatment && bookingData.treatment !== prevData.treatment) {
+      const matched = matchClinicTreatment(bookingData.treatment, treatments);
+      if (!matched) {
+        // Mark as unverified so Sofia asks for clarification; do not advance state.
+        bookingData.unverified_treatment = bookingData.treatment;
+        bookingData.treatment  = prevData.treatment  || null;
+        bookingData.treatments = prevData.treatments || null;
+      }
+    }
 
     const state = getBookingState(bookingData);
 

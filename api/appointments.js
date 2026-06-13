@@ -162,6 +162,49 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    // Verify patient belongs to this clinic
+    if (patient_id) {
+      const patCheck = await fetch(
+        SB_URL + "/rest/v1/patients?id=eq." + patient_id +
+        "&clinic_id=eq." + clinic_id + "&select=id&limit=1",
+        { headers: SB }
+      );
+      const pat = await patCheck.json();
+      if (!Array.isArray(pat) || pat.length === 0) {
+        return res.status(403).json({ error: "Paciente no pertenece a esta clínica" });
+      }
+    }
+
+    // Verify treatment belongs to this clinic and is active.
+    // Use DB price — never trust the price submitted by the frontend.
+    let verifiedTreatment = null;
+    if (treatment_id) {
+      const txCheck = await fetch(
+        SB_URL + "/rest/v1/treatments?id=eq." + treatment_id +
+        "&clinic_id=eq." + clinic_id +
+        "&active=eq.true&select=id,price,duration_minutes&limit=1",
+        { headers: SB }
+      );
+      const tx = await txCheck.json();
+      if (!Array.isArray(tx) || tx.length === 0) {
+        return res.status(403).json({ error: "Tratamiento no disponible en esta clínica" });
+      }
+      verifiedTreatment = tx[0];
+    }
+
+    // Verify pending_booking belongs to this clinic
+    if (pending_booking_id) {
+      const pbCheck = await fetch(
+        SB_URL + "/rest/v1/pending_bookings?id=eq." + pending_booking_id +
+        "&clinic_id=eq." + clinic_id + "&select=id&limit=1",
+        { headers: SB }
+      );
+      const pb = await pbCheck.json();
+      if (!Array.isArray(pb) || pb.length === 0) {
+        return res.status(403).json({ error: "Reserva no encontrada en esta clínica" });
+      }
+    }
+
     // Double-booking check
     const conflict = await checkOverlap(clinic_id, doctor_id, start_time, end_time, null);
     if (conflict) {
@@ -187,7 +230,10 @@ module.exports = async function handler(req, res) {
       status:              "confirmed",
       chief_complaint:     chief_complaint || null,
       notes:               notes || null,
-      price:               price != null ? parseFloat(price) : 0,
+      // When treatment_id is provided, use the DB price — never the frontend value.
+      price:               verifiedTreatment
+                             ? (parseFloat(verifiedTreatment.price) || 0)
+                             : (price != null ? parseFloat(price) : 0),
       source:              source || "manual",
       pending_booking_id:  pending_booking_id || null,
       created_by:          user_id,
