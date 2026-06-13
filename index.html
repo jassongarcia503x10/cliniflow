@@ -126,6 +126,24 @@ function catalogMatch(q) {
   ).slice(0, 6);
 }
 
+// Global treatment_catalog categories (matches the DB CHECK constraint).
+// Used by the Phase 2B activation browser in TabPrecios.
+const CAT_LABELS = [
+  ["",            "Todas las categorias"],
+  ["preventive",   "Preventiva"],
+  ["restorative",  "Restauradora"],
+  ["endodontics",  "Endodoncia"],
+  ["surgery",      "Cirugia / Implantes"],
+  ["orthodontics", "Ortodoncia"],
+  ["prosthetics",  "Protesis"],
+  ["periodontics", "Periodoncia"],
+  ["diagnostic",   "Diagnostico"],
+  ["pediatric",    "Odontopediatria"],
+  ["anesthesia",   "Anestesia"],
+  ["other",        "Otros"],
+];
+const CAT_LABEL_MAP = Object.fromEntries(CAT_LABELS.map(([v,l]) => [v, l]));
+
 // ── SECTION 3: UI ATOMS ───────────────────────────────────────
 const {useState, useEffect, useRef, useContext, createContext} = React;
 const CC = {green:["rgba(34,197,94,.12)","#22c55e"],blue:["rgba(59,130,246,.12)","#60a5fa"],yellow:["rgba(234,179,8,.12)","#eab308"],red:["rgba(239,68,68,.12)","#ef4444"],purple:["rgba(168,85,247,.12)","#c084fc"],orange:["rgba(249,115,22,.12)","#fb923c"]};
@@ -725,6 +743,131 @@ function TabDoctores(){
   </div>;
 }
 
+// ── Phase 2B: GLOBAL CATALOG BROWSER + ACTIVATION ─────────────
+// Search the 272-entry global treatment_catalog via /api/treatment-catalog
+// and activate an entry into this clinic's treatments (price + duration).
+// Inserts populate catalog_id. RLS enforces clinic-admin on the DB side.
+function CatalogBrowser(){
+  const{clinic,loadAll,boom}=useApp();
+  const curr=clinic.currency||"EUR";
+  const[q,setQ]=useState("");
+  const[cat,setCat]=useState("");
+  const[rows,setRows]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[touched,setTouched]=useState(false);
+  const[target,setTarget]=useState(null); // catalog item being activated
+  const[form,setForm]=useState({price:"",price_mode:"exact",duration:30});
+  const[saving,setSaving]=useState(false);
+
+  async function search(){
+    setLoading(true);setTouched(true);
+    try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      let url="/api/treatment-catalog?limit=50";
+      if(q.trim())url+="&q="+encodeURIComponent(q.trim());
+      if(cat)url+="&category="+encodeURIComponent(cat);
+      const r=await fetch(url,{headers:{Authorization:"Bearer "+jwt}});
+      const data=await r.json();
+      if(!r.ok)throw new Error(data.error||("HTTP "+r.status));
+      setRows(Array.isArray(data.data)?data.data:[]);
+    }catch(e){boom("Error al buscar catalogo: "+e.message);}
+    setLoading(false);
+  }
+
+  function openActivate(item){
+    setTarget(item);
+    setForm({price:"",price_mode:item.default_price_mode||"exact",duration:item.default_duration_minutes||30});
+  }
+  function cancelActivate(){setTarget(null);}
+
+  async function confirmActivate(){
+    if(!target)return;
+    if(form.price_mode!=="consult"&&!String(form.price).trim())return;
+    setSaving(true);
+    try{
+      await dbPost("treatments",{
+        clinic_id:clinic.id,
+        catalog_id:target.id,
+        name:target.name,
+        price:form.price_mode==="consult"?null:parseFloat(form.price),
+        price_mode:form.price_mode,
+        duration:parseInt(form.duration)||30,
+        active:true,
+      });
+      boom("Tratamiento activado: "+target.name);
+      setTarget(null);
+      await Promise.all([search(),loadAll()]);
+    }catch(e){
+      const msg=/409|duplicate/i.test(e.message)?"Ese procedimiento ya esta activado":("Error: "+e.message);
+      boom(msg);
+    }
+    setSaving(false);
+  }
+
+  async function reactivate(item){
+    if(!item.clinic_treatment)return;
+    try{
+      await dbPatch("treatments",{active:true},{id:item.clinic_treatment.id});
+      boom("Tratamiento reactivado: "+item.name);
+      await Promise.all([search(),loadAll()]);
+    }catch(e){boom("Error: "+e.message);}
+  }
+
+  return<Card style={{padding:20,marginBottom:16}}>
+    <div style={{fontSize:13,fontWeight:700,marginBottom:4,color:"rgba(255,255,255,.6)"}}>Catalogo dental global</div>
+    <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginBottom:14}}>Busca entre 272 procedimientos y activalos para tu clinica con tu precio y duracion.</div>
+    <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:10,marginBottom:10}}>
+      <Inp label="Buscar procedimiento" value={q} onChange={setQ} placeholder="Ej: endodoncia, corona, implante..."/>
+      <Sel label="Categoria" value={cat} onChange={setCat} opts={CAT_LABELS}/>
+    </div>
+    <Btn onClick={search} disabled={loading} style={{fontSize:12,padding:"8px 16px"}}>{loading?"Buscando...":"Buscar en catalogo"}</Btn>
+
+    {touched&&!loading&&rows.length===0&&<div style={{padding:24,textAlign:"center",color:"rgba(255,255,255,.3)",fontSize:13}}>Sin resultados. Prueba otra busqueda o categoria.</div>}
+
+    {rows.length>0&&<div style={{marginTop:14,border:"1px solid rgba(255,255,255,.06)",borderRadius:12,overflow:"hidden"}}>
+      {rows.map((it,i)=>{
+        const activeAlready=it.already_activated&&it.clinic_treatment&&it.clinic_treatment.active;
+        const inactiveLinked=it.already_activated&&it.clinic_treatment&&!it.clinic_treatment.active;
+        return<div key={it.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:i<rows.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:600,fontSize:14}}>{it.name}</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.35)",marginTop:3,display:"flex",gap:8,alignItems:"center"}}>
+              <Badge c="purple">{CAT_LABEL_MAP[it.category]||it.category}</Badge>
+              <span>{(it.default_duration_minutes||30)+" min"}</span>
+            </div>
+          </div>
+          {activeAlready
+            ? <span style={{fontSize:12,color:"#22c55e",fontWeight:600,flexShrink:0}}>✓ Activado</span>
+            : inactiveLinked
+              ? <Btn variant="ghost" onClick={()=>reactivate(it)} style={{fontSize:12,padding:"6px 14px"}}>Reactivar</Btn>
+              : <Btn onClick={()=>openActivate(it)} style={{fontSize:12,padding:"6px 14px"}}>Activar</Btn>}
+        </div>;
+      })}
+    </div>}
+
+    {target&&<div style={{position:"fixed",inset:0,zIndex:200,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onMouseDown={cancelActivate}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{width:"100%",maxWidth:420}}>
+        <Card style={{padding:22}}>
+          <div style={{fontSize:15,fontWeight:700,marginBottom:2}}>Activar tratamiento</div>
+          <div style={{fontSize:13,color:"#60a5fa",marginBottom:16}}>{target.name}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <Sel label="Tipo de precio" value={form.price_mode} onChange={v=>setForm(p=>Object.assign({},p,{price_mode:v}))} opts={[["exact","Precio fijo"],["from","Desde"],["consult","Consultar"]]}/>
+            <Inp label="Duracion (min)" value={""+form.duration} onChange={v=>setForm(p=>Object.assign({},p,{duration:v}))} placeholder="45"/>
+          </div>
+          {form.price_mode!=="consult"&&<div style={{marginBottom:14}}>
+            <Inp label={"Precio ("+curr+")"} value={form.price} onChange={v=>setForm(p=>Object.assign({},p,{price:v}))} placeholder="80"/>
+          </div>}
+          <div style={{display:"flex",gap:10}}>
+            <Btn onClick={confirmActivate} disabled={saving||(form.price_mode!=="consult"&&!String(form.price).trim())} style={{fontSize:12,padding:"8px 16px"}}>{saving?"Activando...":"Confirmar activacion"}</Btn>
+            <Btn variant="ghost" onClick={cancelActivate} style={{fontSize:12,padding:"8px 14px"}}>Cancelar</Btn>
+          </div>
+        </Card>
+      </div>
+    </div>}
+  </Card>;
+}
+
 function TabPrecios(){
   const{clinic,treats,loadAll,boom}=useApp();
   const curr=clinic.currency||"EUR";
@@ -747,8 +890,9 @@ function TabPrecios(){
   }
   return<div className="animate-in">
     <SectionHeader title="Tratamientos y precios" action={<Btn onClick={reset} style={{fontSize:12,padding:"6px 14px"}}>+ Nuevo</Btn>}/>
+    <CatalogBrowser/>
     <Card style={{padding:20,marginBottom:16}}>
-      <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"rgba(255,255,255,.6)"}}>{editTreat?"Editando tratamiento":"Nuevo tratamiento"}</div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:14,color:"rgba(255,255,255,.6)"}}>{editTreat?"Editando tratamiento":"Nuevo tratamiento (manual)"}</div>
       <div style={{marginBottom:12}}>
         <TreatmentInput value={form.name} onChange={v=>setForm(p=>Object.assign({},p,{name:v}))} onSelect={s=>setForm(p=>Object.assign({},p,{name:s.n,duration:s.d,price_mode:s.m}))}/>
       </div>
