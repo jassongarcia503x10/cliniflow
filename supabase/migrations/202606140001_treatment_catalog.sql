@@ -30,7 +30,7 @@ create table if not exists public.treatment_catalog (
                           'anesthesia',
                           'other'
                         )),
-  default_duration    int         not null check (default_duration > 0),
+  default_duration_minutes int      not null check (default_duration_minutes > 0),
   default_price_mode  text        not null default 'consult'
                         check (default_price_mode in ('exact', 'from', 'consult')),
   active              boolean     not null default true,
@@ -99,7 +99,7 @@ $rls$;
 -- ON CONFLICT DO NOTHING makes this idempotent.
 -- ============================================================
 insert into public.treatment_catalog
-  (slug, name_es, name_en, name_hr, aliases, category, default_duration, default_price_mode)
+  (slug, name_es, name_en, name_hr, aliases, category, default_duration_minutes, default_price_mode)
 values
   -- preventive
   ('limpieza-dental',
