@@ -13,6 +13,8 @@
 //   - never returns clinic prices
 // ============================================================
 
+const { requireClinicUser } = require("../lib/auth");
+
 const SB_URL         = process.env.SUPABASE_URL;
 const SB_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
@@ -36,48 +38,20 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT     = 50;
 const MAX_Q_LENGTH  = 100;
 
+// Log full Supabase failure details server-side, but never leak raw
+// database messages or codes to the client — return a generic 502.
 function returnSupabaseError(res, response, data, operation) {
   const details = data && typeof data === "object" ? data : {};
-  const message = details.message || (typeof data === "string" ? data : "Error de base de datos");
 
   console.error("[treatment-catalog] Supabase " + operation + " failed", {
     status:  response.status,
     code:    details.code,
-    message,
+    message: details.message || (typeof data === "string" ? data : undefined),
     details: details.details,
     hint:    details.hint,
   });
 
-  return res.status(response.status).json({
-    error: message,
-    code:  details.code || undefined,
-  });
-}
-
-// -- JWT -> clinic_id (shared auth logic) ----------------------
-async function resolveClinic(authHeader) {
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    throw Object.assign(new Error("Token requerido"), { status: 401 });
-  }
-  const token = authHeader.slice(7);
-
-  const userRes = await fetch(SB_URL + "/auth/v1/user", {
-    headers: { apikey: SB_SERVICE_KEY, Authorization: "Bearer " + token },
-  });
-  if (!userRes.ok) throw Object.assign(new Error("Token inválido"), { status: 401 });
-  const user = await userRes.json();
-  if (!user.id) throw Object.assign(new Error("No autenticado"), { status: 401 });
-
-  const cuRes = await fetch(
-    SB_URL + "/rest/v1/clinic_users?select=clinic_id,role&user_id=eq." +
-      encodeURIComponent(user.id) + "&limit=1",
-    { headers: SB }
-  );
-  const cu = await cuRes.json();
-  if (!Array.isArray(cu) || cu.length === 0) {
-    throw Object.assign(new Error("Sin clínica asignada"), { status: 403 });
-  }
-  return { user_id: user.id, clinic_id: cu[0].clinic_id, role: cu[0].role };
+  return res.status(502).json({ error: "Error al consultar el catálogo" });
 }
 
 // -- Sanitize a free-text search term for use inside a PostgREST
@@ -112,7 +86,7 @@ module.exports = async function handler(req, res) {
   // -- Authenticate; clinic_id derives only from the JWT ------
   let clinic_id;
   try {
-    ({ clinic_id } = await resolveClinic(req.headers.authorization));
+    ({ clinic_id } = await requireClinicUser(req.headers.authorization));
   } catch (e) {
     return res.status(e.status || 401).json({ error: e.message });
   }
