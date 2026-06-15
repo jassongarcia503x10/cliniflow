@@ -17,6 +17,14 @@ const SB = {
   "Content-Type": "application/json",
 };
 
+// Appointment sources accepted by the DB appointments_source_check.
+// Manual dashboard creation defaults to "panel". The legacy frontend
+// value "manual" is aliased to "panel" so the existing client keeps
+// working without a frontend change.
+const ALLOWED_SOURCES = ["panel", "whatsapp", "phone"];
+const DEFAULT_SOURCE   = "panel";
+const SOURCE_ALIASES   = { manual: "panel" };
+
 function returnSupabaseError(res, response, data, operation) {
   const details = data && typeof data === "object" ? data : {};
   const message = details.message || (typeof data === "string" ? data : "Error de base de datos");
@@ -151,6 +159,22 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: "end_time debe ser posterior a start_time" });
     }
 
+    // Normalize source defensively before the insert:
+    //  - missing/empty   -> default ("panel")
+    //  - legacy "manual" -> "panel" alias
+    //  - unsupported     -> reject with 400 (never reach the DB constraint)
+    let apptSource = DEFAULT_SOURCE;
+    if (source !== undefined && source !== null && source !== "") {
+      const normalized = SOURCE_ALIASES[source] || source;
+      if (!ALLOWED_SOURCES.includes(normalized)) {
+        return res.status(400).json({
+          error:   "Origen de cita no válido",
+          allowed: ALLOWED_SOURCES,
+        });
+      }
+      apptSource = normalized;
+    }
+
     // Verify doctor belongs to this clinic
     const docCheck = await fetch(
       SB_URL + "/rest/v1/doctors?id=eq." + doctor_id + "&clinic_id=eq." + clinic_id + "&limit=1",
@@ -161,17 +185,21 @@ module.exports = async function handler(req, res) {
       return res.status(403).json({ error: "Doctor no pertenece a esta clínica" });
     }
 
-    // Verify patient belongs to this clinic
+    // Verify patient belongs to this clinic.
+    // Capture the patient name from the DB — appointments.patient_name is
+    // NOT NULL and must be derived server-side, never trusted from the body.
+    let verifiedPatient = null;
     if (patient_id) {
       const patCheck = await fetch(
         SB_URL + "/rest/v1/patients?id=eq." + patient_id +
-        "&clinic_id=eq." + clinic_id + "&select=id&limit=1",
+        "&clinic_id=eq." + clinic_id + "&select=id,name&limit=1",
         { headers: SB }
       );
       const pat = await patCheck.json();
       if (!Array.isArray(pat) || pat.length === 0) {
         return res.status(403).json({ error: "Paciente no pertenece a esta clínica" });
       }
+      verifiedPatient = pat[0];
     }
 
     // Verify treatment belongs to this clinic and is active.
@@ -221,6 +249,10 @@ module.exports = async function handler(req, res) {
     const payload = {
       clinic_id,          // always from JWT, never from body
       patient_id:          patient_id || null,
+      // patient_name is NOT NULL in the DB. Derive it from the verified
+      // patient record (never from the frontend); fall back for walk-ins
+      // created without a linked patient.
+      patient_name:        verifiedPatient ? (verifiedPatient.name || "Sin nombre") : "Sin paciente",
       doctor_id:           doctor_id,
       treatment_id:        treatment_id || null,
       start_time,
@@ -231,7 +263,7 @@ module.exports = async function handler(req, res) {
       notes:               notes || null,
       // When treatment_id is provided, use the DB price — never the frontend value.
       price:               verifiedTreatment ? (parseFloat(verifiedTreatment.price) || 0) : 0,
-      source:              source || "manual",
+      source:              apptSource,
       pending_booking_id:  pending_booking_id || null,
       created_by:          user_id,
       confirmed_at:        new Date().toISOString(),
