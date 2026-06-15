@@ -207,15 +207,24 @@ module.exports = async function handler(req, res) {
     // (e.g. seeded rows) is treated as active here too — matching the
     // dropdown. Only active = false is rejected.
     // Use DB price — never trust the price submitted by the frontend.
+    // Select only the fields needed here. duration_minutes is taken from
+    // the form payload, so we do NOT select it (the treatments table uses
+    // "duration", and selecting a non-existent column makes PostgREST
+    // return an error, not an empty list).
     let verifiedTreatment = null;
     if (treatment_id) {
       const txCheck = await fetch(
         SB_URL + "/rest/v1/treatments?id=eq." + treatment_id +
         "&clinic_id=eq." + clinic_id +
-        "&or=(active.eq.true,active.is.null)&select=id,price,duration_minutes&limit=1",
+        "&or=(active.eq.true,active.is.null)&select=id,price&limit=1",
         { headers: SB }
       );
       const tx = await txCheck.json();
+      // Distinguish a real DB/query error from "no matching treatment".
+      // Without this, a query error was misread as "treatment unavailable".
+      if (!txCheck.ok) {
+        return returnSupabaseError(res, txCheck, tx, "treatment validation");
+      }
       if (!Array.isArray(tx) || tx.length === 0) {
         return res.status(403).json({ error: "Tratamiento no disponible en esta clínica" });
       }
