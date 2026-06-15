@@ -17,6 +17,16 @@ const SB = {
   "Content-Type": "application/json",
 };
 
+// Canonical appointment statuses accepted by the DB status check
+// (see 202606130001_appointment_schema_compatibility.sql). Manual
+// creation defaults to "scheduled" — the column default and the
+// safest value accepted by the appointments status constraint.
+const ALLOWED_STATUSES = [
+  "scheduled", "pending", "confirmed", "checked_in", "in_chair",
+  "completed", "cancelled", "no_show",
+];
+const DEFAULT_STATUS = "scheduled";
+
 function returnSupabaseError(res, response, data, operation) {
   const details = data && typeof data === "object" ? data : {};
   const message = details.message || (typeof data === "string" ? data : "Error de base de datos");
@@ -136,7 +146,7 @@ module.exports = async function handler(req, res) {
     const {
       patient_id, doctor_id, treatment_id,
       start_time, end_time, duration_minutes,
-      chief_complaint, notes, source,
+      chief_complaint, notes, source, status,
       pending_booking_id,
     } = req.body || {};
 
@@ -149,6 +159,20 @@ module.exports = async function handler(req, res) {
     }
     if (new Date(end_time) <= new Date(start_time)) {
       return res.status(400).json({ error: "end_time debe ser posterior a start_time" });
+    }
+
+    // Normalize status defensively before the insert:
+    //  - missing/empty  -> safest default ("scheduled")
+    //  - unsupported    -> reject with 400 (never reach the DB constraint)
+    let apptStatus = DEFAULT_STATUS;
+    if (status !== undefined && status !== null && status !== "") {
+      if (!ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({
+          error:   "Estado de cita no válido",
+          allowed: ALLOWED_STATUSES,
+        });
+      }
+      apptStatus = status;
     }
 
     // Verify doctor belongs to this clinic
@@ -226,7 +250,7 @@ module.exports = async function handler(req, res) {
       start_time,
       end_time,
       duration_minutes:    dur,
-      status:              "confirmed",
+      status:              apptStatus,
       chief_complaint:     chief_complaint || null,
       notes:               notes || null,
       // When treatment_id is provided, use the DB price — never the frontend value.
@@ -234,7 +258,7 @@ module.exports = async function handler(req, res) {
       source:              source || "manual",
       pending_booking_id:  pending_booking_id || null,
       created_by:          user_id,
-      confirmed_at:        new Date().toISOString(),
+      confirmed_at:        apptStatus === "confirmed" ? new Date().toISOString() : null,
     };
 
     const r = await fetch(SB_URL + "/rest/v1/appointments", {
@@ -243,7 +267,19 @@ module.exports = async function handler(req, res) {
       body:    JSON.stringify(payload),
     });
     const data = await r.json();
-    if (!r.ok) return returnSupabaseError(res, r, data, "appointment create");
+    if (!r.ok) {
+      // Surface a clean message if the DB status check rejects the value,
+      // instead of leaking the raw Postgres constraint error.
+      const blob = JSON.stringify(data || {}).toLowerCase();
+      if (r.status === 400 && blob.includes("status") && blob.includes("check")) {
+        console.error("[appointments] status check rejected value", { status: apptStatus, data });
+        return res.status(400).json({
+          error:   "Estado de cita no aceptado por la base de datos",
+          allowed: ALLOWED_STATUSES,
+        });
+      }
+      return returnSupabaseError(res, r, data, "appointment create");
+    }
 
     const appt = Array.isArray(data) ? data[0] : data;
 
