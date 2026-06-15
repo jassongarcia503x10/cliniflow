@@ -202,14 +202,17 @@ module.exports = async function handler(req, res) {
       verifiedPatient = pat[0];
     }
 
-    // Verify treatment belongs to this clinic and is active.
+    // Verify treatment belongs to this clinic and is not deactivated.
+    // The UI shows treatments where active !== false, so active = NULL
+    // (e.g. seeded rows) is treated as active here too — matching the
+    // dropdown. Only active = false is rejected.
     // Use DB price — never trust the price submitted by the frontend.
     let verifiedTreatment = null;
     if (treatment_id) {
       const txCheck = await fetch(
         SB_URL + "/rest/v1/treatments?id=eq." + treatment_id +
         "&clinic_id=eq." + clinic_id +
-        "&active=eq.true&select=id,price,duration_minutes&limit=1",
+        "&or=(active.eq.true,active.is.null)&select=id,price,duration_minutes&limit=1",
         { headers: SB }
       );
       const tx = await txCheck.json();
