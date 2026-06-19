@@ -258,8 +258,8 @@ function TabDashboard(){
   const todayStr=now.toISOString().slice(0,10);
   const mStart=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-01";
   const confAppts=appts.filter(a=>a.status==="confirmed");
-  const todayA=confAppts.filter(a=>(a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
-  const monthA=confAppts.filter(a=>(a.appointment_date||a.created_at||"")>=mStart);
+  const todayA=confAppts.filter(a=>(a.start_time||a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
+  const monthA=confAppts.filter(a=>(a.start_time||a.appointment_date||a.created_at||"")>=mStart);
   const rev=monthA.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
   const activePats=patients.filter(p=>p.active!==false);
   const pending=pendingBookings.filter(b=>b.status==="pending").length;
@@ -493,7 +493,8 @@ function TabCitas(){
       const data=await r.json();
       if(!r.ok)throw new Error(data.error||(data.conflict?"Horario ocupado: "+new Date(data.conflict.start_time).toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"}):r.status));
       boom(editAppt?"Cita actualizada":"Cita creada");
-      resetForm();fetchAppts();
+      // Refresh the Agenda (apiAppts) AND the dashboard/global state (appts).
+      resetForm();fetchAppts();loadAll();
     }catch(e){boom("Error: "+e.message);}setSaving(false);
   }
 
