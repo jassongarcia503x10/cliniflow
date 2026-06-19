@@ -251,13 +251,16 @@ function Login({onLogin}){
 // ── SECTION 6: TAB COMPONENTS ─────────────────────────────────
 
 function TabDashboard(){
-  const{clinic,leads,appts,doctors,treats,patients,pendingBookings,setTab,selectPatient}=useApp();
+  // Sprint 5 / P-07: Dashboard reads the single-source `appointments` (joined,
+  // start_time-canonical, no 30-row cap). Legacy `appts` stays in context for
+  // other paths until the cleanup phase.
+  const{clinic,leads,appointments,doctors,treats,patients,pendingBookings,setTab,selectPatient}=useApp();
   const curr=clinic.currency||"EUR";
   const bc=clinic.brand_color||"#0066ff";
   const now=new Date();
   const todayStr=now.toISOString().slice(0,10);
   const mStart=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0")+"-01";
-  const confAppts=appts.filter(a=>a.status==="confirmed");
+  const confAppts=appointments.filter(a=>a.status==="confirmed");
   const todayA=confAppts.filter(a=>(a.start_time||a.appointment_date||a.created_at||"").slice(0,10)===todayStr);
   const monthA=confAppts.filter(a=>(a.start_time||a.appointment_date||a.created_at||"")>=mStart);
   const rev=monthA.reduce((s,a)=>s+(parseFloat(a.price)||0),0);
