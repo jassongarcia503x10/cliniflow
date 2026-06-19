@@ -1094,6 +1094,10 @@ function App(){
   const[tab,setTab]=useState("dashboard");
   const[leads,setLeads]=useState([]);
   const[appts,setAppts]=useState([]);
+  // Sprint 5 / P-07: future single source of truth for appointments (joined,
+  // from GET /api/appointments). Populated in parallel; NOT yet consumed by any
+  // component. Dashboard still uses `appts`, Agenda still uses `apiAppts`.
+  const[appointments,setAppointments]=useState([]);
   const[pendingBookings,setPendingBookings]=useState([]);
   const[doctors,setDoctors]=useState([]);
   const[treats,setTreats]=useState([]);
@@ -1117,8 +1121,23 @@ function App(){
 
   function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3500);}
 
+  // Sprint 5 / P-07: future single source loader. Fetches joined appointments
+  // (patients/doctors/treatments) from the API and stores them in `appointments`.
+  // Non-breaking: no component reads `appointments` yet. Failures are non-fatal
+  // (the legacy `appts`/`apiAppts` paths remain authoritative for now).
+  async function loadAppointments(){
+    try{
+      const sess=await sb.auth.getSession();
+      const jwt=(sess.data.session||{}).access_token||"";
+      const r=await fetch("/api/appointments",{headers:{Authorization:"Bearer "+jwt}});
+      const data=await r.json();
+      setAppointments(Array.isArray(data)?data:[]);
+    }catch(e){/* non-fatal: legacy appts/apiAppts remain the source for now */}
+  }
+
   async function loadAll(){
     setLoading(true);
+    loadAppointments();
     try{
       const[l,a,p,d,t,m,ptsRes]=await Promise.all([
         dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
@@ -1212,6 +1231,7 @@ function App(){
 
   const ctx={
     clinic,setClinic,tab,setTab,leads,appts,pendingBookings,doctors,treats,msgs,patients,
+    appointments,loadAppointments,  // Sprint 5 / P-07: future single source (not yet consumed)
     selPatient,setSelPatient,patNotes,patRecords,
     loading,chat,setChat,chatIn,setChatIn,chatLoad,sofiaMode,setSofiaMode,
     mic,micStatus,confirmingId,
