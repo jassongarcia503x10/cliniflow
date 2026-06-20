@@ -251,9 +251,8 @@ function Login({onLogin}){
 // ── SECTION 6: TAB COMPONENTS ─────────────────────────────────
 
 function TabDashboard(){
-  // Sprint 5 / P-07: Dashboard reads the single-source `appointments` (joined,
-  // start_time-canonical, no 30-row cap). Legacy `appts` stays in context for
-  // other paths until the cleanup phase.
+  // Sprint 5 / P-07: Dashboard reads the single-source `appointments`
+  // (joined, start_time-canonical, no 30-row cap).
   const{clinic,leads,appointments,doctors,treats,patients,pendingBookings,setTab,selectPatient}=useApp();
   const curr=clinic.currency||"EUR";
   const bc=clinic.brand_color||"#0066ff";
@@ -435,8 +434,8 @@ function TabPacientes(){
 
 function TabCitas(){
   // Sprint 5 / P-07: Agenda reads the single-source `appointments` (joined, from
-  // GET /api/appointments via loadAppointments). The legacy per-tab `apiAppts`
-  // fetch is removed; `todayOnly` now filters client-side using start_time.
+  // GET /api/appointments via loadAppointments). `todayOnly` filters
+  // client-side using start_time.
   const{clinic,appointments,loadAppointments,loading,doctors,treats,patients,loadAll,boom}=useApp();
   const curr=clinic.currency||"EUR";
   const bc=clinic.brand_color||"#0066ff";
@@ -1088,10 +1087,8 @@ function App(){
   const[clinic,setClinic]=useState(null);
   const[tab,setTab]=useState("dashboard");
   const[leads,setLeads]=useState([]);
-  const[appts,setAppts]=useState([]);
-  // Sprint 5 / P-07: future single source of truth for appointments (joined,
-  // from GET /api/appointments). Populated in parallel; NOT yet consumed by any
-  // component. Dashboard still uses `appts`, Agenda still uses `apiAppts`.
+  // Sprint 5 / P-07: single source of truth for appointments (joined, from
+  // GET /api/appointments via loadAppointments). Consumed by Dashboard + Agenda.
   const[appointments,setAppointments]=useState([]);
   const[pendingBookings,setPendingBookings]=useState([]);
   const[doctors,setDoctors]=useState([]);
@@ -1116,10 +1113,9 @@ function App(){
 
   function boom(msg){setToast(msg);setTimeout(()=>setToast(""),3500);}
 
-  // Sprint 5 / P-07: future single source loader. Fetches joined appointments
-  // (patients/doctors/treatments) from the API and stores them in `appointments`.
-  // Non-breaking: no component reads `appointments` yet. Failures are non-fatal
-  // (the legacy `appts`/`apiAppts` paths remain authoritative for now).
+  // Sprint 5 / P-07: single source loader. Fetches joined appointments
+  // (patients/doctors/treatments) from the API into `appointments`, consumed by
+  // Dashboard + Agenda. Failures are non-fatal (the list simply stays as-is).
   async function loadAppointments(){
     try{
       const sess=await sb.auth.getSession();
@@ -1127,23 +1123,23 @@ function App(){
       const r=await fetch("/api/appointments",{headers:{Authorization:"Bearer "+jwt}});
       const data=await r.json();
       setAppointments(Array.isArray(data)?data:[]);
-    }catch(e){/* non-fatal: legacy appts/apiAppts remain the source for now */}
+    }catch(e){/* non-fatal: keep current appointments on error */}
   }
 
   async function loadAll(){
     setLoading(true);
     loadAppointments();
     try{
-      const[l,a,p,d,t,m,ptsRes]=await Promise.all([
+      // appointments load via loadAppointments() above (single source).
+      const[l,p,d,t,m,ptsRes]=await Promise.all([
         dbGet("leads",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
-        dbGet("appointments",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("pending_bookings",{eq:{clinic_id:clinic.id},order:"created_at.desc",limit:30}),
         dbGet("doctors",{eq:{clinic_id:clinic.id},order:"created_at.asc"}),
         dbGet("treatments",{eq:{clinic_id:clinic.id},order:"name.asc"}),
         dbGet("messages",{eq:{clinic_id:clinic.id},order:"created_at.asc",limit:50}),
         (async()=>{const sess=await sb.auth.getSession();const jwt=(sess.data.session||{}).access_token||"";return fetch("/api/patients",{headers:{Authorization:"Bearer "+jwt}}).then(r=>r.json());})(),
       ]);
-      setLeads(Array.isArray(l)?l:[]);setAppts(Array.isArray(a)?a:[]);
+      setLeads(Array.isArray(l)?l:[]);
       setPendingBookings(Array.isArray(p)?p:[]);setDoctors(Array.isArray(d)?d:[]);
       setTreats(Array.isArray(t)?t:[]);setMsgs(Array.isArray(m)?m:[]);
       setPatients(Array.isArray(ptsRes)?ptsRes:(Array.isArray(ptsRes.data)?ptsRes.data:[]));
@@ -1225,7 +1221,7 @@ function App(){
   if(!clinic)return<Login onLogin={(c,s)=>setClinic(c)}/>;
 
   const ctx={
-    clinic,setClinic,tab,setTab,leads,appts,pendingBookings,doctors,treats,msgs,patients,
+    clinic,setClinic,tab,setTab,leads,pendingBookings,doctors,treats,msgs,patients,
     appointments,loadAppointments,  // Sprint 5 / P-07: future single source (not yet consumed)
     selPatient,setSelPatient,patNotes,patRecords,
     loading,chat,setChat,chatIn,setChatIn,chatLoad,sofiaMode,setSofiaMode,
