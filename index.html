@@ -434,7 +434,10 @@ function TabPacientes(){
 }
 
 function TabCitas(){
-  const{clinic,appts,doctors,treats,patients,loadAll,boom}=useApp();
+  // Sprint 5 / P-07: Agenda reads the single-source `appointments` (joined, from
+  // GET /api/appointments via loadAppointments). The legacy per-tab `apiAppts`
+  // fetch is removed; `todayOnly` now filters client-side using start_time.
+  const{clinic,appointments,loadAppointments,loading,doctors,treats,patients,loadAll,boom}=useApp();
   const curr=clinic.currency||"EUR";
   const bc=clinic.brand_color||"#0066ff";
 
@@ -445,23 +448,12 @@ function TabCitas(){
   const[todayOnly,setTodayOnly]=useState(true);
   const[form,setForm]=useState({patient_id:"",doctor_id:"",treatment_id:"",date:"",start_hour:"09",start_min:"00",duration:"30",notes:"",price:""});
 
-  // Fetch appointments from API
-  const[apiAppts,setApiAppts]=useState([]);
-  const[loadingAppts,setLoadingAppts]=useState(false);
-  async function fetchAppts(){
-    setLoadingAppts(true);
-    try{
-      const sess=await sb.auth.getSession();
-      const jwt=(sess.data.session||{}).access_token||"";
-      let url="/api/appointments";
-      if(todayOnly){const d=new Date().toISOString().slice(0,10);url+="?date="+d;}
-      const r=await fetch(url,{headers:{Authorization:"Bearer "+jwt}});
-      const data=await r.json();
-      setApiAppts(Array.isArray(data)?data:[]);
-    }catch(e){boom("Error cargando citas: "+e.message);}
-    setLoadingAppts(false);
-  }
-  useEffect(()=>{if(clinic)fetchAppts();},[clinic,todayOnly]);
+  // Client-side view over the single source. "Solo hoy" filters by start_time
+  // (fallback appointment_date/created_at). API order is start_time.asc.
+  const todayStr=new Date().toISOString().slice(0,10);
+  const visible=todayOnly
+    ? appointments.filter(a=>(a.start_time||a.appointment_date||a.created_at||"").slice(0,10)===todayStr)
+    : appointments;
 
   function resetForm(){setForm({patient_id:"",doctor_id:"",treatment_id:"",date:"",start_hour:"09",start_min:"00",duration:"30",notes:"",price:""});setEditAppt(null);setShowForm(false);}
 
@@ -496,8 +488,8 @@ function TabCitas(){
       const data=await r.json();
       if(!r.ok)throw new Error(data.error||(data.conflict?"Horario ocupado: "+new Date(data.conflict.start_time).toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"}):r.status));
       boom(editAppt?"Cita actualizada":"Cita creada");
-      // Refresh the Agenda (apiAppts) AND the dashboard/global state (appts).
-      resetForm();fetchAppts();loadAll();
+      // Refresh the single source (updates Agenda + Dashboard together).
+      resetForm();loadAll();
     }catch(e){boom("Error: "+e.message);}setSaving(false);
   }
 
@@ -511,7 +503,7 @@ function TabCitas(){
       const data=await r.json();
       if(!r.ok)throw new Error(data.error||r.status);
       boom({confirmed:"Confirmada",checked_in:"Check-in realizado",in_chair:"Tratamiento iniciado",completed:"Completada",cancelled:"Cancelada",no_show:"No-show registrado"}[status]||"Actualizado");
-      fetchAppts();
+      loadAppointments();
     }catch(e){boom("Error: "+e.message);}
   }
 
@@ -542,7 +534,7 @@ function TabCitas(){
           <input type="checkbox" checked={todayOnly} onChange={e=>setTodayOnly(e.target.checked)}/>
           Solo hoy
         </label>
-        <Btn onClick={fetchAppts} variant="ghost" style={{fontSize:12,padding:"6px 12px"}}>Actualizar</Btn>
+        <Btn onClick={loadAppointments} variant="ghost" style={{fontSize:12,padding:"6px 12px"}}>Actualizar</Btn>
         <Btn onClick={()=>{resetForm();setShowForm(true);}} style={{fontSize:12,padding:"6px 14px"}}>+ Nueva cita</Btn>
       </div>
     </div>
@@ -600,11 +592,11 @@ function TabCitas(){
     {/* LISTA */}
     <Card>
       <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{apiAppts.length} citas{todayOnly?" hoy":""}</span>
-        {loadingAppts&&<span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>Cargando...</span>}
+        <span style={{fontSize:13,color:"rgba(255,255,255,.4)"}}>{visible.length} citas{todayOnly?" hoy":""}</span>
+        {loading&&<span style={{fontSize:11,color:"rgba(255,255,255,.3)"}}>Cargando...</span>}
       </div>
-      {apiAppts.length===0&&!loadingAppts&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas{todayOnly?" para hoy":""}</div>}
-      {apiAppts.map((a,i)=>{
+      {visible.length===0&&!loading&&<div style={{padding:32,textAlign:"center",color:"rgba(255,255,255,.3)"}}>Sin citas{todayOnly?" para hoy":""}</div>}
+      {visible.map((a,i)=>{
         const st=STATUS_UI[a.status]||STATUS_UI.pending;
         const pat=a.patients||{name:a.patient_name||"Paciente"};
         const doc=a.doctors||{name:a.doctor_name||"-",color:"#3b82f6"};
@@ -615,7 +607,7 @@ function TabCitas(){
         const dateStr=start.toLocaleDateString("es",{day:"numeric",month:"short"});
         const nexts=NEXT_STATUS[a.status]||[];
         const hasAllergy=pat.allergies&&pat.allergies.length>0;
-        return<div key={a.id} style={{padding:"14px 20px",borderBottom:i<apiAppts.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
+        return<div key={a.id} style={{padding:"14px 20px",borderBottom:i<visible.length-1?"1px solid rgba(255,255,255,.04)":"none"}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
             {/* Time column */}
             <div style={{minWidth:90,textAlign:"center",padding:"8px 10px",background:"rgba(255,255,255,.04)",borderRadius:8}}>
